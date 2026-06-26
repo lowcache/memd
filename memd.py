@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 HOME = os.path.expanduser("~")
@@ -795,27 +796,45 @@ def collect_inbox(project_path):
 def write_inbox_note(root, text, source=None):
     """Append a curator inbox note under <root>/.memory/inbox/ with a
     collision-proof name, so independent writers (the `remember` MCP tool,
-    Claude Code, manual drops) never clobber each other. The filename carries a
-    sortable timestamp, the writer's pid, and random bytes; O_EXCL guarantees a
-    fresh file even on the astronomically unlikely name collision. Returns the
-    written path."""
-    inbox = os.path.join(root, ".memory", "inbox")
+    Claude Code, manual drops) never clobber each other.
+
+    The note is fully written to a temp file OUTSIDE the inbox, then published
+    by an atomic os.link into the inbox. A concurrent sweep (collect_inbox +
+    os.remove) therefore sees a complete file or no file — never a half-written
+    one. This matches the `remember` MCP tool's atomic-publish discipline; the
+    inbox is a shared multi-writer resource and is only as safe as its weakest
+    writer, so every writer must publish atomically. The filename carries a
+    microsecond timestamp, the writer's pid, and random bytes; os.link fails
+    (rather than clobbers) on the astronomically unlikely name collision,
+    preserving the no-overwrite guarantee. Returns the written path."""
+    mem = os.path.join(root, ".memory")
+    inbox = os.path.join(mem, "inbox")
     os.makedirs(inbox, exist_ok=True)
     body = text if text.endswith("\n") else text + "\n"
     if source:
         body = f"<!-- source: {source} -->\n{body}"
-    stamp = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
-    for _ in range(8):
-        name = f"{stamp}-{os.getpid()}-{os.urandom(4).hex()}.md"
-        path = os.path.join(inbox, name)
-        try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except FileExistsError:
-            continue
+    stamp = dt.datetime.now().strftime("%Y%m%dT%H%M%S%f")
+    # Temp lives in <root>/.memory/ (same filesystem as inbox, so os.link is
+    # atomic) but outside inbox/, and is dotfile-prefixed — collect_inbox scans
+    # only inbox/ and skips dotfiles, so the temp is never ingested.
+    fd, tmp = tempfile.mkstemp(dir=mem, prefix=".inbox-", suffix=".tmp")
+    try:
         with os.fdopen(fd, "w") as f:
             f.write(body)
-        return path
-    raise RuntimeError(f"could not create a unique inbox note in {inbox}")
+        for _ in range(8):
+            name = f"{stamp}-{os.getpid()}-{os.urandom(4).hex()}.md"
+            path = os.path.join(inbox, name)
+            try:
+                os.link(tmp, path)
+            except FileExistsError:
+                continue
+            return path
+        raise RuntimeError(f"could not create a unique inbox note in {inbox}")
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 # --------------------------------------------------------------------------
