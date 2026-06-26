@@ -390,9 +390,10 @@ def ensure_global(cfg):
     scaffold(gr, name="global", model_stub=False)
     mem = os.path.join(gr, ".memory")
     write_global_index(cfg)  # generate the project map into the seed commit
-    if cfg.get("git_commit") and not git_toplevel(mem):
-        # Give the global store its own git history (its project path — usually
-        # $HOME — is not itself a repo, so commit inside .memory directly).
+    # Give the global store its own git history. Gate on .memory/.git directly
+    # (not git_toplevel(mem)) so a git repo at $HOME can't make this think
+    # ~/.memory is already versioned and skip its standalone init.
+    if cfg.get("git_commit") and not os.path.isdir(os.path.join(mem, ".git")):
         for argv in (["init", "-q"], ["add", "-A"],
                      ["commit", "-q", "-m", "memd: seed global memory root"]):
             try:
@@ -400,7 +401,10 @@ def ensure_global(cfg):
             except (OSError, subprocess.TimeoutExpired) as e:
                 log(f"global git init failed: {e}")
                 break
-    cfg["projects"][gr] = {"name": "global", "extra_sources": [], "global": True}
+    # Preserve any pre-existing entry (custom name/extra_sources); just flag it.
+    entry = cfg["projects"].get(gr) or {"name": "global", "extra_sources": []}
+    entry["global"] = True
+    cfg["projects"][gr] = entry
     save_config(cfg)
     log(f"initialized global memory root at {mem}")
     return gr
@@ -647,7 +651,11 @@ def project_ag_dbs(cfg, project_path):
     conv = ag_conversations_dir(cfg)
     if not os.path.isdir(conv):
         return []
-    roots = sorted(os.path.realpath(p) for p in cfg["projects"])
+    # Exclude the global root: its path ($HOME) is a substring of every home
+    # path, so it would win _ag_assign_project's mention-count and steal every
+    # conversation from the real (nested) project. Global is inbox-only anyway.
+    roots = sorted(os.path.realpath(p) for p, e in cfg["projects"].items()
+                   if not e.get("global"))
     index = load_json(AG_INDEX_PATH, {})
     changed = False
     out = []
@@ -906,9 +914,12 @@ def enforce_budget_mistakes(project_path, name, budget):
 
 def git_commit_memory(project_path, message):
     mem = os.path.join(project_path, ".memory")
-    # Normal project: .memory lives inside the project's git repo. Global root:
-    # the project path (e.g. $HOME) is not a repo, but .memory is its own repo.
-    top = git_toplevel(project_path) or git_toplevel(mem)
+    # Resolve the repo from .memory itself, not the project path. For a normal
+    # project this is the project's own repo (.memory lives inside it); for the
+    # global root it is ~/.memory's standalone repo. Deriving from project_path
+    # would, if $HOME were ever a git repo (dotfiles), commit global memory into
+    # the home repo instead of ~/.memory.
+    top = git_toplevel(mem)
     if not top:
         return
     rel = os.path.relpath(mem, top)
@@ -1096,7 +1107,12 @@ def cmd_hook(cfg, event):
     if event == "session-start":
         if root is None:
             top = git_toplevel(cwd)
-            if top and cfg["auto_scaffold"] and top not in cfg["exclude"]:
+            gr = cfg.get("global_root")
+            # Don't auto-scaffold the global root as a normal project (would
+            # write a .model/ stub into $HOME and shadow the global entry) — this
+            # matters only if $HOME is ever itself a git repo.
+            if (top and cfg["auto_scaffold"] and top not in cfg["exclude"]
+                    and (not gr or top != os.path.realpath(gr))):
                 scaffold(top)
                 register(cfg, top)
                 root = top
@@ -1289,6 +1305,11 @@ def main():
         gr = ensure_global(cfg)
         print(f"global memory root ready at {os.path.join(gr, '.memory')}" if gr
               else "no global_root configured")
+    elif args.cmd == "init" and os.path.realpath(args.path) == os.path.realpath(cfg.get("global_root") or "\0"):
+        # Don't let a bare `memd init ~` register the global root as a normal
+        # project (model stub in $HOME, lost "global" flag). Route to --global.
+        print("that path is the global memory root; use: memd init --global")
+        sys.exit(2)
     elif args.cmd == "init":
         path = os.path.realpath(args.path)
         created = scaffold(path, args.name)
