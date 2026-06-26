@@ -36,6 +36,7 @@ CURSORS_PATH = os.path.join(STATE_DIR, "cursors.json")
 AG_INDEX_PATH = os.path.join(STATE_DIR, "ag_index.json")
 META_PATH = os.path.join(STATE_DIR, "meta.json")
 LOCK_DIR = os.path.join(STATE_DIR, "locks")
+STATE_LOCK_PATH = os.path.join(STATE_DIR, "state.lock")
 LOG_PATH = os.path.join(STATE_DIR, "memd.log")
 CLAUDE_PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
 CLAUDE_SETTINGS = os.path.join(HOME, ".claude", "settings.json")
@@ -67,6 +68,9 @@ DEFAULT_CONFIG = {
     "global_root": HOME,            # project path whose .memory holds system/user/
                                     # cross-project truth (store: ~/.memory). The
                                     # fallback when a session belongs to no project.
+    "global_brief_chars": 800,      # cap for the global state.md excerpt layered
+                                    # into a project session's brief. 0 = pointer
+                                    # only (no excerpt); <0 = omit the global slice.
 }
 
 # --------------------------------------------------------------------------
@@ -183,6 +187,25 @@ def atomic_write(path, text):
     with open(tmp, "w") as f:
         f.write(text)
     os.replace(tmp, path)
+
+
+def update_json(path, mutate):
+    """Read-modify-write a shared registry JSON file (cursors, meta) under a
+    process-wide lock, so concurrent project syncs can't lose each other's
+    updates. The on-disk value is re-read inside the lock and only the caller's
+    delta is merged in — never a stale in-memory snapshot. The lock is held only
+    for the merge, never across a curator call."""
+    os.makedirs(STATE_DIR, exist_ok=True)
+    fd = open(STATE_LOCK_PATH, "w")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        data = load_json(path, {})
+        mutate(data)
+        save_json(path, data)
+        return data
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
 
 
 def load_config():
@@ -769,6 +792,32 @@ def collect_inbox(project_path):
     return notes, paths
 
 
+def write_inbox_note(root, text, source=None):
+    """Append a curator inbox note under <root>/.memory/inbox/ with a
+    collision-proof name, so independent writers (the `remember` MCP tool,
+    Claude Code, manual drops) never clobber each other. The filename carries a
+    sortable timestamp, the writer's pid, and random bytes; O_EXCL guarantees a
+    fresh file even on the astronomically unlikely name collision. Returns the
+    written path."""
+    inbox = os.path.join(root, ".memory", "inbox")
+    os.makedirs(inbox, exist_ok=True)
+    body = text if text.endswith("\n") else text + "\n"
+    if source:
+        body = f"<!-- source: {source} -->\n{body}"
+    stamp = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
+    for _ in range(8):
+        name = f"{stamp}-{os.getpid()}-{os.urandom(4).hex()}.md"
+        path = os.path.join(inbox, name)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "w") as f:
+            f.write(body)
+        return path
+    raise RuntimeError(f"could not create a unique inbox note in {inbox}")
+
+
 # --------------------------------------------------------------------------
 # the distill: prompt -> claude -p -> validated apply
 # --------------------------------------------------------------------------
@@ -1012,23 +1061,24 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
                        f"curator distill, trigger={trigger}")
         enforce_budget_mistakes(project_path, name, cfg["budgets"]["mistakes.md"])
 
-        # advance cursors and clear inbox only after a successful apply
-        cursors.update(new_cursors)
-        save_json(CURSORS_PATH, cursors)
+        # advance cursors and clear inbox only after a successful apply. Merge
+        # under the state lock against the current on-disk file (not the snapshot
+        # read at the top of this sync) so a concurrent sync of another project
+        # doesn't clobber our advance — or get clobbered by it.
+        update_json(CURSORS_PATH, lambda c: c.update(new_cursors))
         for p in inbox_paths:
             try:
                 os.remove(p)
             except OSError:
                 pass
 
-        meta = load_json(META_PATH, {})
-        meta[project_path] = {
+        meta_entry = {
             "last_sync": dt.datetime.now().isoformat(timespec="seconds"),
             "trigger": trigger,
             "model": model,
             "summary": str(result.get("summary", ""))[:300],
         }
-        save_json(META_PATH, meta)
+        update_json(META_PATH, lambda m: m.__setitem__(project_path, meta_entry))
 
         if cfg["git_commit"]:
             git_commit_memory(
@@ -1048,6 +1098,42 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
 # --------------------------------------------------------------------------
 # brief (session-start context)
 # --------------------------------------------------------------------------
+
+
+def global_slice(cfg, global_root):
+    """Bounded, pointer-style view of cross-project (global) memory for layering
+    into a project session's brief. Surfaces a pointer to the global store, a
+    capped excerpt of its state.md, and a few global open todos — never the full
+    bodies, so global facts are discoverable without bulk-injecting them every
+    session. Cap is cfg['global_brief_chars']: 0 = pointer only, <0 = omit."""
+    cap = cfg.get("global_brief_chars", 800)
+    if cap < 0:
+        return []
+    mem = os.path.join(global_root, ".memory")
+    if not os.path.isdir(mem):
+        return []
+    out = [f"Global memory (cross-project) lives at {mem} — read its state.md / "
+           "decisions.md there when a task touches user, system, or cross-project "
+           "facts; leave global notes in its inbox/."]
+    if cap > 0:
+        state_p = os.path.join(mem, "state.md")
+        if os.path.exists(state_p):
+            _, body = split_frontmatter(open(state_p).read())
+            excerpt = body.strip()
+            if excerpt:
+                if len(excerpt) > cap:
+                    excerpt = (excerpt[:cap].rstrip()
+                               + "\n[... global state.md truncated; read in full "
+                                 "if relevant ...]")
+                out.append("Global state.md (excerpt):\n" + excerpt)
+    todo_p = os.path.join(mem, "todo.md")
+    if os.path.exists(todo_p):
+        _, body = split_frontmatter(open(todo_p).read())
+        items = re.findall(r"(?m)^\s*[-*] \[ \] (.+)$", body)[:5]
+        if items:
+            out.append("Global open todo items:\n"
+                       + "\n".join(f"- {i}" for i in items))
+    return out
 
 
 def make_brief(cfg, project_path):
@@ -1075,6 +1161,14 @@ def make_brief(cfg, project_path):
     _, inbox_paths = collect_inbox(project_path)
     if inbox_paths:
         parts.append(f"{len(inbox_paths)} unprocessed curator inbox note(s).")
+    # Layer in a bounded slice of cross-project (global) memory, but only when
+    # this session belongs to a real project — not when it IS the global root
+    # (which would duplicate its own content) or has no global_root configured.
+    gr = cfg.get("global_root")
+    if gr:
+        gr = os.path.realpath(gr)
+        if gr != project_path:
+            parts += global_slice(cfg, gr)
     return "\n\n".join(parts)
 
 
@@ -1269,6 +1363,24 @@ def cmd_status(cfg):
               f"{len(pending)} with pending content, {inbox} inbox note(s)")
 
 
+def cmd_note(cfg, args):
+    text = args.message if args.message is not None else sys.stdin.read()
+    text = text.strip()
+    if not text:
+        print("empty note; nothing written", file=sys.stderr)
+        return 2
+    if args.is_global:
+        root = ensure_global(cfg)
+        if not root:
+            print("no global_root configured", file=sys.stderr)
+            return 2
+    else:
+        path = os.path.realpath(args.project)
+        root = find_project(cfg, path) or git_toplevel(path) or path
+    print(write_inbox_note(os.path.realpath(root), text, source=args.source))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="memd", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1295,6 +1407,13 @@ def main():
     p = sub.add_parser("hook", help="claude-code hook entry (reads JSON on stdin)")
     p.add_argument("event", choices=["session-start", "session-end", "pre-compact"])
 
+    p = sub.add_parser("note", help="append a collision-safe note to a curator inbox")
+    p.add_argument("--project", default=".")
+    p.add_argument("--global", dest="is_global", action="store_true",
+                   help="write to the global memory inbox instead of a project")
+    p.add_argument("-m", "--message", help="note text (default: read from stdin)")
+    p.add_argument("--source", help="optional writer label recorded in the note")
+
     p = sub.add_parser("exclude", help="never auto-manage a path")
     p.add_argument("path")
 
@@ -1316,13 +1435,14 @@ def main():
         register(cfg, path, args.name)
         # Baseline: start memory from now. Pre-existing transcripts are
         # presumed covered by existing memory (or not worth back-filling).
-        cursors = load_json(CURSORS_PATH, {})
         skipped = 0
-        for src in transcript_files(cfg, path):
-            if src not in cursors:
-                cursors[src] = baseline_cursor(src)
-                skipped += 1
-        save_json(CURSORS_PATH, cursors)
+        def _baseline(cursors):
+            nonlocal skipped
+            for src in transcript_files(cfg, path):
+                if src not in cursors:
+                    cursors[src] = baseline_cursor(src)
+                    skipped += 1
+        update_json(CURSORS_PATH, _baseline)
         print(f"registered {path}"
               + (f", created {len(created)} file(s)" if created else "")
               + (f", baselined {skipped} existing transcript(s)" if skipped else ""))
@@ -1339,6 +1459,8 @@ def main():
     elif args.cmd == "brief":
         brief = make_brief(cfg, args.path)
         print(brief or "(no .memory directory here)")
+    elif args.cmd == "note":
+        sys.exit(cmd_note(cfg, args))
     elif args.cmd == "hook":
         sys.exit(cmd_hook(cfg, args.event))
     elif args.cmd == "exclude":
