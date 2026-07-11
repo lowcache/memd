@@ -44,7 +44,7 @@
       apps = forAll (pkgs: rec {
         memd = {
           type = "app";
-          program = "${self.packages.${pkgs.system}.memd}/bin/memd";
+          program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.memd}/bin/memd";
         };
         default = memd;
       });
