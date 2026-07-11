@@ -86,8 +86,19 @@ Or declaratively, with the bundled home-manager module (package +
 
 ```nix
 imports = [ memd.homeManagerModules.default ];
-services.memd.enable = true;                  # sweep timer on, 30min
-services.memd.installClaudeHooks = true;      # optional: wire ~/.claude hooks
+
+services.memd = {
+  enable = true;
+  installClaudeHooks = true;      # optional: wire ~/.claude settings.json hooks idempotently
+
+  # optional configuration for the periodic sweep timer:
+  sweep = {
+    enable = true;                # run `memd sweep` periodically (default: true)
+    interval = "30min";           # interval between runs (default: "30min")
+    onBoot = "5min";              # delay before the first sweep after boot (default: "5min")
+    randomizedDelay = "2min";     # randomized delay jitter (default: "2min")
+  };
+};
 ```
 
 ## Tests
