@@ -10,6 +10,7 @@ import time
 
 from memd.config import CONFIG_PATH, HOME, STATE_DIR, log, today
 from memd.errors import ConfigError, CuratorError
+from memd.memory import SKELETONS, split_frontmatter
 
 # --------------------------------------------------------------------------
 # curator charter — the system contract for the distillation model
@@ -69,6 +70,13 @@ MECHANICS
   sections into archive_entries rather than deleting them.
 - Multiple agents may have worked in parallel; merge their threads, dedupe.
 
+SELF-CHECK (before you output)
+- Every todo you closed or archived: does the digest EXPLICITLY say it was
+  completed, verified, or abandoned? If not, keep it open.
+- Every new fact in state.md: is it stated in the digest or an inbox note,
+  not inferred or assumed?
+- No YAML frontmatter, no markdown fences, no prose around the JSON.
+
 OUTPUT — exactly one JSON object, no markdown fences, no prose around it:
 {
   "summary": "<one line: what changed in memory>",
@@ -78,6 +86,13 @@ OUTPUT — exactly one JSON object, no markdown fences, no prose around it:
   "mistakes_new_entries": ["### YYYY-MM-DD — <title>\\n<symptom/cause/prevention>", ...],
   "archive_entries": [{"source": "<file it came from>", "content": "<verbatim section>"}, ...]
 }
+
+EXAMPLE (illustrative; real inputs are far longer)
+Digest: "U: move api to port 9090, 8080 clashes with unifi
+A: changed config/server.yaml 8080->9090, restarted, health check passes"
+Output: {"summary": "api port 8080->9090 (unifi clash)", "state_body":
+"<full state.md body with the port fact replaced>", "decisions_body": null,
+"todo_body": null, "mistakes_new_entries": [], "archive_entries": []}
 """
 # --------------------------------------------------------------------------
 # the distill: prompt -> claude -p -> validated apply
@@ -188,15 +203,49 @@ def validate(result, memory):
             continue
         if not isinstance(v, str):
             raise CuratorError(f"{key} is not a string")
-        old = memory[key.replace("_body", "") + ".md"]
+
+        v2 = re.sub(r"^```(?:markdown|md)?\s*\n|\n```\s*$", "", v.strip())
+        if v2 != v.strip():
+            log(f"stripped fences from {key}")
+
+        meta, body2 = split_frontmatter(v2)
+        if meta:
+            v2 = body2
+            log(f"stripped curator-emitted frontmatter from {key}")
+
+        fname = key.replace("_body", "") + ".md"
+        if v2.strip() == SKELETONS[fname]:
+            result[key] = None
+            log(f"curator returned skeleton for {key}; treated as no-change")
+            continue
+
+        result[key] = v2
+
+        old = memory[fname]
         archived = sum(
             len(a.get("content", "")) for a in result.get("archive_entries", [])
             if isinstance(a, dict)
         )
-        if len(old) > 800 and len(v) + archived < len(old) * 0.4:
+        if len(old) > 800 and len(v2) + archived < len(old) * 0.4:
             raise CuratorError(f"shrink guard tripped on {key} "
-                               f"({len(old)} -> {len(v)} chars, {archived} archived)")
+                               f"({len(old)} -> {len(v2)} chars, {archived} archived)")
     for e in result.get("mistakes_new_entries", []):
         if not isinstance(e, str):
             raise CuratorError("mistakes_new_entries contains a non-string")
     return result
+
+
+def dedupe_mistakes(entries, existing_body):
+    """Drop entries whose '### ' heading line already appears verbatim in
+    mistakes.md (inbox is duplicate-tolerated; the audit log must not be)."""
+    out = []
+    for e in entries:
+        e = (e or "").strip()
+        if not e:
+            continue
+        head = e.splitlines()[0].strip()
+        if head.startswith("### ") and head in existing_body:
+            log(f"duplicate mistakes entry skipped: {head[:80]}")
+            continue
+        out.append(e)
+    return out

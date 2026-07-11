@@ -163,6 +163,8 @@ def redact(text):
             return "[REDACTED]"
         text = rx.sub(sub_extra, text)
     return text
+
+
 # --- antigravity-cli adapter ------------------------------------------------
 # Conversations live in <antigravity_dir>/conversations/*.db (SQLite, one
 # trajectory per file; `steps` rows hold protobuf payloads). There is no
@@ -336,6 +338,8 @@ def project_ag_dbs(cfg, project_path):
     if changed:
         save_json(AG_INDEX_PATH, index)
     return sorted(out)
+
+
 def digest_source(src, cursor):
     """Dispatch to the right digester. Returns (text, new_cursor)."""
     if src.endswith(".db"):
@@ -353,3 +357,22 @@ def cap_digest(text, cap):
     head = int(cap * 0.3)
     tail = cap - head
     return text[:head] + "\n[... digest truncated ...]\n" + text[-tail:]
+
+
+def collapse_repeats(text):
+    """Collapse runs of identical non-blank lines (agent retry loops)
+    into one line plus a repeat marker."""
+    out, prev, reps = [], None, 0
+    for line in text.splitlines():
+        if line == prev and line.strip():
+            reps += 1
+            continue
+        if reps:
+            out.append(f"[... line repeated {reps} more time(s) ...]")
+            reps = 0
+        out.append(line)
+        prev = line
+    if reps:
+        out.append(f"[... line repeated {reps} more time(s) ...]")
+    return "\n".join(out)
+

@@ -9,8 +9,8 @@ import re
 
 from memd.config import (CLAUDE_PROJECTS_DIR, CURSORS_PATH, LOCK_DIR,
                          META_PATH, load_json, log, update_json)
-from memd.curator import build_prompt, call_curator, validate
-from memd.digest import (ag_max_idx, cap_digest, digest_source,
+from memd.curator import build_prompt, call_curator, dedupe_mistakes, validate
+from memd.digest import (ag_max_idx, cap_digest, collapse_repeats, digest_source,
                          project_ag_dbs, redact)
 from memd.inbox import collect_inbox
 from memd.memory import (append_archive, enforce_budget_mistakes,
@@ -33,6 +33,8 @@ def project_lock(path):
 def encode_claude_dir(path):
     """Mirror claude-code's project-dir encoding (non-alnum -> '-')."""
     return re.sub(r"[^A-Za-z0-9-]", "-", path)
+
+
 def source_pending(src, cursors):
     """Does a transcript source have content beyond its cursor?"""
     try:
@@ -41,6 +43,8 @@ def source_pending(src, cursors):
         return os.path.getsize(src) > cursors.get(src, 0)
     except OSError:
         return False
+
+
 def transcript_files(cfg, project_path):
     """All transcript sources for a project: claude dirs + extra globs.
 
@@ -78,6 +82,8 @@ def transcript_files(cfg, project_path):
         files.extend(_glob.glob(os.path.expanduser(pattern)))
     files.extend(project_ag_dbs(cfg, project_path))
     return sorted(set(files))
+
+
 def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=False):
     """Distill new session content into a project's memory.
 
@@ -114,7 +120,7 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
             return None
 
         digest = redact(cap_digest(
-            "\n\n--- next session span ---\n\n".join(digests),
+            collapse_repeats("\n\n--- next session span ---\n\n".join(digests)),
             cfg["digest_cap_chars"]))
         inbox_notes = [redact(n) for n in inbox_notes]
         model = cfg["model_small"]
@@ -143,7 +149,8 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
             if isinstance(body, str) and body.strip() and body.strip() != memory[fname]:
                 write_memory_file(os.path.join(mem, fname), body, name,
                                   fname.split(".")[0])
-        new_mistakes = [e for e in result.get("mistakes_new_entries", []) if e.strip()]
+        new_mistakes = dedupe_mistakes(result.get("mistakes_new_entries", []),
+                                       memory["mistakes.md"])
         if new_mistakes:
             mpath = os.path.join(mem, "mistakes.md")
             body = memory["mistakes.md"]
