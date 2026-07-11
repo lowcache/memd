@@ -36,13 +36,18 @@ project whose root path their payloads mention most (cached in
 `~/.local/state/memd/ag_index.json`; unattributed ones are rescanned as
 they grow). All digests pass a credential-redaction filter (`ya29.`, `ghp_`,
 `sk-`, JWTs, …) since sessions sometimes read secrets.
+[NOTE: the filter is now a named-pattern set (`REDACT_PATTERNS`, 14 entries);
+add per-instance patterns via the `REDACT_EXTRA_PATTERNS` config list.]
 
 Anything else talks to memd through `./.memory/inbox/`: drop a markdown
 note there and the next sweep or sync ingests and deletes it. That is also
 how swarm agents hand observations to the curator without write access to
-memory files. Extra transcript sources (claude-format JSONL) can be added
-per project in `~/.config/memd/config.json` under
-`projects.<path>.extra_sources`.
+memory files. The writer/reader contract (atomic publish, fsync, naming,
+delete-only-after-apply) is specified in
+[INBOX-PROTOCOL.md](INBOX-PROTOCOL.md); the noctalia-claude-plugin
+`remember` tool is a conforming writer. Extra transcript sources
+(claude-format JSONL) can be added per project in
+`~/.config/memd/config.json` under `projects.<path>.extra_sources`.
 
 ## Commands
 
@@ -56,9 +61,40 @@ per project in `~/.config/memd/config.json` under
 | `memd install-hooks` | idempotently wire hooks into `~/.claude/settings.json` |
 | `memd exclude <path>` | never auto-manage a path |
 
-State lives in `~/.local/state/memd/` (cursors, locks, log), config in
-`~/.config/memd/config.json` (models, budgets, quiet period, registry).
-Deployed by `home/memd.nix` (package + `memd-sweep` systemd user timer).
+[NOTE: table omits `memd note` (collision-safe inbox note writer) and
+`memd sweep --jobs N` (parallel sweep; default 4, config `sweep_jobs`).]
+
+State lives in `$XDG_STATE_HOME/memd/` (cursors, locks, log; default
+`~/.local/state/memd/`), config in `$XDG_CONFIG_HOME/memd/config.json`
+(models, budgets, quiet period, registry).
+
+## Install
+
+memd is a single stdlib-only Python 3.11+ script — `memd.py` on `$PATH`
+(as `memd`) is a complete install. With nix:
+[CORRECTION: memd is now a stdlib-only package (`memd/`) with `memd.py` as a
+thin shim; a bare `memd.py` copy is no longer a complete install — use the nix
+package or ship the `memd/` directory alongside the shim.]
+
+```
+nix run github:lowcache/memd -- status        # or nix run .# -- status
+nix profile install github:lowcache/memd
+```
+
+Or declaratively, with the bundled home-manager module (package +
+`memd-sweep` systemd user timer):
+
+```nix
+imports = [ memd.homeManagerModules.default ];
+services.memd.enable = true;                  # sweep timer on, 30min
+services.memd.installClaudeHooks = true;      # optional: wire ~/.claude hooks
+```
+
+## Tests
+
+`python -m pytest tests/ -q` (stdlib + pytest, no network, never touches
+real user state or a real `claude`). `nix flake check` runs the suite plus
+a package smoke check.
 
 ## Claude-code independence
 
