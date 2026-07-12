@@ -85,6 +85,11 @@ def main():
 
     p = sub.add_parser("brief", help="print session-start memory brief")
     p.add_argument("path", nargs="?", default=".")
+    p.add_argument("--max-chars", type=int,
+                   help="hard cap on total brief output for this run")
+    p.add_argument("--topic",
+                   help="only content sections mentioning this keyword "
+                        "(case-insensitive)")
 
     p = sub.add_parser("hook", help="claude-code hook entry (reads JSON on stdin)")
     p.add_argument("event", choices=["session-start", "session-end", "pre-compact"])
@@ -142,7 +147,8 @@ def main():
     elif args.cmd == "install-hooks":
         cmd_install_hooks()
     elif args.cmd == "brief":
-        brief = make_brief(cfg, args.path)
+        brief = make_brief(cfg, args.path, max_chars=args.max_chars,
+                           topic=args.topic)
         print(brief or "(no .memory directory here)")
     elif args.cmd == "note":
         sys.exit(cmd_note(cfg, args))

@@ -4,3 +4,7 @@ result
 result-*
 .model/tasks/
 .nanocoder
+.claude/
+*.egg-info/
+dist/
+build/

@@ -252,37 +252,148 @@ def global_slice(cfg, global_root):
     return out
 
 
-def make_brief(cfg, project_path):
+# Content-section boundary inside memory-file bodies: h2/h3 headings only —
+# the h1 file title is never a section boundary.
+SECTION_RE = re.compile(r"(?m)^(?=#{2,3} \S)")
+DATE_RE = re.compile(r"\b(20\d\d-\d\d-\d\d)\b")
+
+
+def split_sections(body):
+    """Split a memory-file body into (heading, body) h2/h3 sections. Anything
+    before the first section heading (h1 title, preamble) is dropped."""
+    out = []
+    for chunk in SECTION_RE.split(body):
+        chunk = chunk.strip()
+        if not re.match(r"#{2,3} \S", chunk):
+            continue
+        heading, _, rest = chunk.partition("\n")
+        out.append((heading.strip(), rest.strip()))
+    return out
+
+
+def section_date(text):
+    """Newest ISO date mentioned in a section, or None. Missing timestamps are
+    tolerated — recency scoring degrades to 'sorted last', never a crash."""
+    dates = DATE_RE.findall(text)
+    return max(dates) if dates else None
+
+
+def brief_sections(cfg, mem):
+    """Ordered (priority, heading, body, char_count) content sections for the
+    budgeted brief. Priority tiers: 1 open todos, 2 recent decisions, 3 state.md
+    excerpts, 4 mistakes summary. Recency DESC within a tier (state.md keeps
+    document order: top of file is most recent per curator conventions)."""
+    sections = []
+
+    def add(priority, heading, body):
+        sections.append((priority, heading, body, len(heading) + 1 + len(body)))
+
+    todo_p = os.path.join(mem, "todo.md")
+    if os.path.exists(todo_p):
+        _, body = split_frontmatter(open(todo_p).read())
+        items = re.findall(r"(?m)^\s*[-*] \[ \] (.+)$", body)[:8]
+        if items:
+            add(1, "Open todo items:", "\n".join(f"- {i}" for i in items))
+
+    dec_p = os.path.join(mem, "decisions.md")
+    if os.path.exists(dec_p):
+        _, body = split_frontmatter(open(dec_p).read())
+        days = cfg.get("brief_decisions_days", 30)
+        cutoff = (dt.date.today() - dt.timedelta(days=days)).isoformat()
+        recent = []
+        for heading, sbody in split_sections(body):
+            d = section_date(heading + "\n" + sbody)
+            # undated sections are kept (graceful degradation) but sort last
+            if d is None or d >= cutoff:
+                recent.append((d or "", heading, sbody))
+        recent.sort(key=lambda t: t[0], reverse=True)
+        for _, heading, sbody in recent:
+            add(2, heading, sbody)
+
+    state_p = os.path.join(mem, "state.md")
+    if os.path.exists(state_p):
+        _, body = split_frontmatter(open(state_p).read())
+        for heading, sbody in split_sections(body):
+            add(3, heading, sbody)
+
+    mis_p = os.path.join(mem, "mistakes.md")
+    if os.path.exists(mis_p):
+        _, body = split_frontmatter(open(mis_p).read())
+        entries = re.split(r"(?m)^(?=### )", body)[1:]
+        if entries:
+            # summary only: count + newest entry (append-only file, so last
+            # entry is newest), never the full log body
+            add(4, f"Mistakes log: {len(entries)} entries; most recent:",
+                entries[-1].strip())
+    return sections
+
+
+def make_brief(cfg, project_path, max_chars=None, topic=None):
     project_path = os.path.realpath(project_path)
     mem = os.path.join(project_path, ".memory")
     if not os.path.isdir(mem):
         return None
-    parts = [BRIEF_NOTE]
-    meta = load_json(META_PATH, {}).get(project_path)
-    if meta:
-        parts.append(f"Last memory distill: {meta['last_sync']} "
-                     f"({meta['trigger']}) — {meta['summary']}")
-    state_p = os.path.join(mem, "state.md")
-    if os.path.exists(state_p):
-        fm, _ = split_frontmatter(open(state_p).read())
-        if fm:
-            parts.append(f"Project: {fm.get('project', '?')} | state.md updated "
-                         f"{fm.get('last_updated', '?')} | status {fm.get('status', '?')}")
-    todo_p = os.path.join(mem, "todo.md")
-    if os.path.exists(todo_p):
-        _, body = split_frontmatter(open(todo_p).read())
-        open_items = re.findall(r"(?m)^\s*[-*] \[ \] (.+)$", body)[:8]
-        if open_items:
-            parts.append("Open todo items:\n" + "\n".join(f"- {i}" for i in open_items))
-    _, inbox_paths = collect_inbox(project_path)
-    if inbox_paths:
-        parts.append(f"{len(inbox_paths)} unprocessed curator inbox note(s).")
-    # Layer in a bounded slice of cross-project (global) memory, but only when
-    # this session belongs to a real project — not when it IS the global root
-    # (which would duplicate its own content) or has no global_root configured.
-    gr = cfg.get("global_root")
-    if gr:
-        gr = os.path.realpath(gr)
-        if gr != project_path:
-            parts += global_slice(cfg, gr)
-    return "\n\n".join(parts)
+    sections = brief_sections(cfg, mem)
+    if topic is not None:
+        t = topic.lower()
+        sections = [s for s in sections
+                    if t in s[1].lower() or t in s[2].lower()]
+        if not sections:
+            return BRIEF_NOTE
+    head, tail = [BRIEF_NOTE], []
+    if topic is None:
+        # fixed (unbudgeted) parts around the content sections — the pre-budget
+        # brief in full, so default output is a strict superset of it
+        meta = load_json(META_PATH, {}).get(project_path)
+        if meta:
+            head.append(f"Last memory distill: {meta['last_sync']} "
+                        f"({meta['trigger']}) — {meta['summary']}")
+        state_p = os.path.join(mem, "state.md")
+        if os.path.exists(state_p):
+            fm, _ = split_frontmatter(open(state_p).read())
+            if fm:
+                head.append(f"Project: {fm.get('project', '?')} | state.md updated "
+                            f"{fm.get('last_updated', '?')} | status {fm.get('status', '?')}")
+        _, inbox_paths = collect_inbox(project_path)
+        if inbox_paths:
+            tail.append(f"{len(inbox_paths)} unprocessed curator inbox note(s).")
+        # Layer in a bounded slice of cross-project (global) memory, but only
+        # when this session belongs to a real project — not when it IS the
+        # global root (which would duplicate its own content) or has no
+        # global_root configured.
+        gr = cfg.get("global_root")
+        if gr:
+            gr = os.path.realpath(gr)
+            if gr != project_path:
+                tail += global_slice(cfg, gr)
+    # --max-chars hint in the omission notice: total size with nothing omitted
+    full = len("\n\n".join(head + [h + "\n" + b for _, h, b, _ in sections]
+                           + tail))
+
+    def assemble(kept, omitted):
+        parts = head + kept
+        if omitted:
+            parts.append(f"{omitted} more sections omitted — "
+                         f"use --max-chars {full} to expand")
+        return "\n\n".join(parts + tail)
+
+    budget = cfg.get("brief_chars", 2500)
+    kept, used, omitted = [], 0, 0
+    for i, (_, heading, body, count) in enumerate(sections):
+        if used + count > budget:
+            # never truncate mid-section: drop this and all trailing sections
+            omitted = len(sections) - i
+            break
+        kept.append(heading + "\n" + body)
+        used += count
+    out = assemble(kept, omitted)
+    if max_chars is not None:
+        # hard cap on TOTAL output: shed whole trailing sections first
+        # (boundary-clean), raw-truncate only if the fixed parts alone exceed it
+        while len(out) > max_chars and kept:
+            kept.pop()
+            omitted += 1
+            out = assemble(kept, omitted)
+        if len(out) > max_chars:
+            out = out[:max_chars].rstrip()
+    return out

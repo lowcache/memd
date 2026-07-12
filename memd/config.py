@@ -58,6 +58,12 @@ DEFAULT_CONFIG = {
     "global_brief_chars": 800,      # cap for the global state.md excerpt layered
                                     # into a project session's brief. 0 = pointer
                                     # only (no excerpt); <0 = omit the global slice.
+    "brief_chars": 2500,            # budget for the brief's content sections
+                                    # (todos / decisions / state / mistakes) —
+                                    # the fixed BRIEF_NOTE + metadata overhead
+                                    # (~300 chars) is not counted against it.
+    "brief_decisions_days": 30,     # recency window for decisions.md sections
+                                    # surfaced in the brief.
 }
 
 # --------------------------------------------------------------------------

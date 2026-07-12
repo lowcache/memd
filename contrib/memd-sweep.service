@@ -1,0 +1,7 @@
+[Unit]
+Description=memd inbox sweep
+
+[Service]
+Type=oneshot
+ExecStart=memd sweep
+Nice=10

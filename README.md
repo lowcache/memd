@@ -1,5 +1,9 @@
 # memd — Agent-Driven Project Memory Curator
 
+<p align="center">
+  <img src="assets/memd.png" alt="memd logo" width="320" />
+</p>
+
 [![Release](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/lowcache/memd)
 [![Python Version Compatibility](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-brightgreen.svg)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -195,6 +199,26 @@ Before transcripts or inbox notes reach the curator backend, they are automatica
 
 ## Installation
 
+### pip Installation
+
+Requires Python **3.10+**. `memd` has zero runtime dependencies (standard library only).
+
+```bash
+# From PyPI
+pip install memd
+
+# With pipx (recommended for CLI tools — isolated, no system-Python friction)
+pipx install memd
+
+# Directly from the repository, no PyPI needed
+pip install git+https://github.com/lowcache/memd
+
+# From a local clone (add -e for editable/development mode)
+pip install .
+```
+
+> **PEP 668 note:** distributions that mark the system Python as externally managed (NixOS, Debian 12+, Arch, Fedora 38+) reject bare `pip install` outside a virtual environment. Use `pipx`, or a venv: `python3 -m venv ~/.venvs/memd && ~/.venvs/memd/bin/pip install memd`.
+
 ### Nix Installation
 
 `memd` is packaged as a Nix flake. You can run or install it directly:
@@ -228,18 +252,33 @@ Import the module and enable the periodic sweep timer:
 }
 ```
 
-### Standard Python Installation
+#### Standalone systemd User Service & Timer
 
-`memd` is compatible with **Python 3.10 to 3.13** and uses standard library packages exclusively.
+For non-Nix environments, a standalone systemd user service and timer can be set up using files in the `contrib/` directory:
 
-1.  Clone the repository and copy the `memd/` directory into your Python `site-packages` directory (or include it in your python path).
-2.  Generate a thin `memd` wrapper shim pointing to the main execution hook:
-    ```python
-    import sys
-    from memd.cli import main
-    if __name__ == "__main__":
-        main()
-    ```
+```bash
+# Copy units to the user systemd directory
+cp contrib/memd-sweep.* ~/.config/systemd/user/
+
+# Reload the systemd user manager
+systemctl --user daemon-reload
+
+# Enable and start the timer
+systemctl --user enable --now memd-sweep.timer
+```
+
+Refer to [contrib/README.md](contrib/README.md) for detailed customization and uninstallation instructions.
+
+### Manual Installation (no pip, no Nix)
+
+`memd` is compatible with **Python 3.10 to 3.13** and uses standard library packages exclusively, so a plain clone runs as-is:
+
+```bash
+git clone https://github.com/lowcache/memd && cd memd
+./memd.py --help
+```
+
+Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd.py" ~/.local/bin/memd`.
 
 ---
 
