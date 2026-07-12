@@ -1,7 +1,7 @@
 # memd — Agent-Driven Project Memory Curator
 
 <p align="center">
-  <img src="assets/memd.png" alt="memd logo" width="320" />
+  <img src="assets/memd.png" alt="memd logo" />
 </p>
 
 [![Release](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/lowcache/memd)
