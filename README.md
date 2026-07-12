@@ -9,23 +9,25 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Nix Flake](https://img.shields.io/badge/Nix-Flake-blueviolet.svg)](#nix-installation)
 
-An automated, headless project memory archivist designed to maintain durable context for AI coding assistants. `memd` monitors your workspaces, processes session logs from various CLIs (`claude-code`, `antigravity-cli`, and custom agents), and distills them into a structured, Git-versioned knowledge base under `./.memory/`.
+`memd` gives your AI coding tools a memory that survives between sessions. It runs quietly in the background, reads the session logs your CLIs leave behind (`claude-code`, `antigravity-cli`, custom agents), and boils them down into a few small, git-versioned markdown files under `./.memory/` — the stuff worth remembering, minus the noise.
 
 ---
 
 ## Why memd?
 
-As AI coding assistants and multi-agent swarms operate on a codebase, they inevitably generate long transcripts, encounter configuration quirks, and make architectural decisions. Standard session limits cause models to lose context over time, leading to repetitive questions, forgotten constraints, and recycled mistakes.
+Every AI coding session ends the same way: the context window fills up, the session closes, and everything the model figured out — the port that service actually runs on, why you picked SQLite, the bug it hit last Tuesday — is gone. Next session it asks the same questions and steps on the same rakes.
 
-`memd` solves this by continuously curating a lightweight, high-signal set of active markdown memory files:
-*   **Context Preservation:** Keeps a structured log of the current system state, active decisions, and todo roadmaps.
-*   **Noise Reduction:** Discards conversational chatter and tool execution details, retaining only what a future agent needs.
-*   **Swarm Coordination:** Provides an asynchronous, lock-safe inbox interface for multi-agent collaboration.
-*   **Git Integration:** Automatically commits memory changes to track the evolution of your project context.
+`memd` fixes that by keeping a small set of memory files up to date automatically:
+*   **Remembers what matters:** current system state, active decisions, and open todos, in plain markdown you can read yourself.
+*   **Skips what doesn't:** conversational back-and-forth and tool spam get dropped; only durable facts survive.
+*   **Works with a crowd:** a lock-safe inbox lets any agent, script, or human hand a note to the curator without stepping on anyone else.
+*   **Keeps receipts:** memory changes are committed to git, so you can see how your project's context evolved over time.
 
 ---
 
-## Architectural Flow
+## How It Works
+
+Sessions end (or a timer fires), memd collects whatever is new — transcripts, databases, inbox notes — scrubs it for secrets, and hands it to a small "curator" model that rewrites the memory files. Python code, not the model, gets the final say on what's allowed to change.
 
 ```mermaid
 graph TD
@@ -55,56 +57,78 @@ graph TD
 
 ---
 
-## Memory File Structures
+## The Four Memory Files
 
-`memd` scaffolds and curates four distinct markdown files under `./.memory/`:
+Everything lands in four markdown files under `./.memory/`:
 
-| File | Purpose | Rules & Formatting |
+| File | What's in it | House rules |
 | :--- | :--- | :--- |
-| [`state.md`](#statemd) | **System State:** The single source of truth for the *current* live status. Contains ports, directory maps, active services, hardware specs, and active workarounds. | Written in the present tense. Stale facts are immediately replaced; historical logs are not allowed here. |
-| [`decisions.md`](#decisionsmd) | **Architecture Decisions:** The log of active architectural decisions and developer preferences. | Each entry lists what was decided, why, and what it rules out. Constraints must limit future work. |
-| [`todo.md`](#todomd) | **Task Roadmap:** The backlog of open items, roadmaps, and verification loops. | Items are moved to the archive once verified complete or abandoned. |
-| [`mistakes.md`](#mistakesmd) | **Mistake Audit Log:** An append-only audit log of configuration/implementation mistakes. | Each entry lists the symptom, root cause, and exact prevention rule to avoid recurrence. |
+| `state.md` | What's true *right now*: ports, directory layout, running services, active workarounds. | Present tense only. When a fact goes stale it gets replaced — no history kept here. |
+| `decisions.md` | What was decided, why, and what that rules out. | Each entry has to actually constrain future work, not just describe the past. |
+| `todo.md` | What's still open: tasks, roadmap items, things to verify. | Finished or abandoned items move to the archive. |
+| `mistakes.md` | What went wrong before, and how to not do it again. | Append-only. Each entry: symptom, root cause, and the rule that prevents a repeat. |
 
-*Note: Pre-existing or completed sections that overflow active size budgets are offloaded to `./.memory/archive/YYYY-MM.md`.*
-
----
-
-## Invariants Enforced by Code (Not the LLM)
-
-To ensure stability and resist prompt injection or hallucinated overrides, `memd` enforces strict validation invariants directly in Python:
-
-1.  **YAML Frontmatter Enforcement:** All memory files require valid metadata frontmatter containing `type`, `project`, `last_updated`, and `status`.
-2.  **Append-Only Mistakes:** `mistakes.md` is strictly append-only. The curator cannot edit or delete past mistakes.
-3.  **Shrink Guard:** Rejects distills that lose >60% of an active file's character length in a single run without explicitly moving the deleted sections into `archive_entries`.
-4.  **Size Budgets:** Active files are capped by character limits (configured in `config.json`). When exceeded, the oldest sections are automatically partitioned and appended to `./.memory/archive/YYYY-MM.md`.
-5.  **Multi-Process Safety:** Per-project file locking (`flock`) coordinates sweeps and hooks, ensuring concurrent agents do not race or corrupt memory files.
-6.  **Cursor Isolation:** A process-safe database cursor system tracks transcript byte offsets and SQLite step indexes. Cursors only advance after a successful distillation and file write.
+*Anything that overflows the size budgets gets moved to `./.memory/archive/YYYY-MM.md` instead of deleted.*
 
 ---
 
-## Ingestion Sources
+## Teaching Your Agents to Use the Memory
 
-`memd` aggregates context from multiple sources before running the curator:
+Keeping the memory curated is only half the job. The models working in your codebase won't read `.memory/` unless something tells them it exists and how to behave around it. The rules boil down to three:
+
+1.  **Read first.** Check `state.md`, `decisions.md`, `mistakes.md`, and `todo.md` (or run `memd brief` for a short digest) before doing real work.
+2.  **Don't edit the memory files.** The curator owns them and rewrites them on every pass — hand-edits just get overwritten.
+3.  **Send new facts through the inbox.** `memd note -m "..."`, or drop a file in `.memory/inbox/`. One fact per note.
+
+You don't have to write those instructions yourself. [`contrib/agents/`](contrib/agents/) ships ready-made instruction files for the major tools — drop the right one into your project and you're done:
+
+| Tool | File | Goes in |
+| :--- | :--- | :--- |
+| Codex, Cursor, Gemini CLI, Zed, and anything else on the [agents.md](https://agents.md) standard | `AGENTS.md` | project root |
+| Claude Code (knows about memd's hooks) | `CLAUDE.md` | project root |
+| Gemini / antigravity-cli | `GEMINI.md` | project root |
+| GitHub Copilot | `copilot-instructions.md` | `.github/` |
+| Cursor (rules format) | `memd.mdc` | `.cursor/rules/` |
+
+Already have a `CLAUDE.md` or `AGENTS.md`? Append the memd section instead of overwriting — the files are written to compose. Details in [`contrib/agents/README.md`](contrib/agents/README.md).
+
+---
+
+## Guardrails Enforced by Code (Not the LLM)
+
+The curator model is useful but not trusted. The rules that keep memory intact live in plain Python, so a confused (or prompt-injected) model can't wreck the store:
+
+1.  **Frontmatter required:** Every memory file must carry valid YAML frontmatter (`type`, `project`, `last_updated`, `status`), or the write is rejected.
+2.  **Mistakes are forever:** `mistakes.md` is append-only. The curator can add entries but never edit or delete old ones.
+3.  **Shrink guard:** A distill that would delete more than 60% of a file gets rejected — unless the removed sections were explicitly moved to the archive.
+4.  **Size budgets:** Each file has a character cap (set in `config.json`). Overflow gets moved to `./.memory/archive/YYYY-MM.md`, oldest sections first.
+5.  **No races:** Per-project file locking (`flock`) keeps concurrent sweeps, hooks, and agents from corrupting each other's writes.
+6.  **Nothing skipped:** memd tracks how far it has read into each transcript and database, and only advances that marker after a successful distill and write — a failed run just gets retried from the same spot.
+
+---
+
+## Where the Raw Material Comes From
+
+`memd` pulls from several sources before each distill:
 
 ### 1. `claude-code` Hooks
-`memd` can integrate directly with the official Anthropic `claude-code` CLI using lifecycle hooks wired in `~/.claude/settings.json`.
-*   **Session Start (`SessionStart`):** Injects a structured memory brief directly into the assistant's initial prompt context.
-*   **Session End (`SessionEnd` / `PreCompact`):** Triggers a background `memd sync` to digest the transcript of the completed session.
+`memd` plugs into the `claude-code` CLI through lifecycle hooks in `~/.claude/settings.json` (wired up for you by `memd install-hooks`):
+*   **Session start:** the memory brief gets injected into the assistant's starting context, so it begins the session already knowing the project.
+*   **Session end / pre-compact:** a background `memd sync` digests the transcript of the session that just finished.
 
 ### 2. `antigravity-cli` Database Parsing
-For `antigravity-cli`, `memd` reads SQLite database trajectories from `~/.gemini/antigravity-cli/conversations/*.db` natively.
-*   Extracts step payloads (user inputs, assistant responses, tool actions/summaries, and errors).
-*   Heuristically attributes conversations to registered projects based on the frequency of workspace path references in the payloads (indexed in `~/.local/state/memd/ag_index.json`).
+For `antigravity-cli`, `memd` reads the SQLite conversation databases in `~/.gemini/antigravity-cli/conversations/*.db` directly:
+*   Pulls out the useful steps — user inputs, assistant responses, tool actions, errors.
+*   Figures out which project a conversation belongs to by counting workspace-path mentions in the payloads (index kept in `~/.local/state/memd/ag_index.json`).
 
 ### 3. The Inbox Protocol (v1.0)
-The global and project-level inboxes provide a contract for handing arbitrary observations to the curator without direct write access to memory files. This allows independent swarm agents, MCP tools, CI scripts, or human actions to submit facts.
+The inbox is how everything else — another agent, an MCP tool, a CI script, you with a text editor — hands a fact to the curator without touching the memory files directly. Drop a markdown note in the inbox; the next sweep folds it into memory and deletes the note.
 
 *   **Project Inbox:** `<project-root>/.memory/inbox/` (feeds local project files)
 *   **Global Inbox:** `<global_root>/.memory/inbox/` (default `~/.memory/inbox/`, feeds system-wide/cross-project files)
 
-#### Conforming Writer Requirements
-To prevent race conditions with the reader's delete-on-apply cycle, all writers MUST write atomically:
+#### Rules for Writers
+The inbox has many writers and one reader that deletes what it consumes, so a sloppy writer can lose data for everyone. Every writer must publish atomically:
 1.  **Stage Outside the Inbox:** Write the markdown note to a temporary file in the *parent* `.memory/` directory (e.g. `.remember-*.tmp`).
 2.  **fsync the File:** Durably sync the data to disk (`flush` + `fsync`).
 3.  **Atomic Publish:** Publish to the `inbox/` directory via `rename(2)` or `link(2)` (`os.replace` or `os.link`).
@@ -159,9 +183,9 @@ Configuration is stored in `$XDG_CONFIG_HOME/memd/config.json` (defaults to `~/.
 
 ## Built-In Credential Redaction
 
-Before transcripts or inbox notes reach the curator backend, they are automatically run through a robust regex redaction filter to prevent API keys and secrets from being leaked to the model.
+Session transcripts have a bad habit of containing API keys. Before anything reaches the curator model, `memd` scrubs it with a set of regex filters, so a token that leaked into a transcript doesn't leak again into a prompt (or into a git-committed memory file).
 
-`memd` includes 13 built-in redaction rules:
+13 rules are built in:
 *   `google_oauth` (Google OAuth2 tokens, `ya29.` prefix)
 *   `github_pat` (Classic and fine-grained GitHub tokens)
 *   `anthropic_key` (Anthropic API keys, `sk-ant-` prefix)
@@ -188,7 +212,7 @@ Before transcripts or inbox notes reach the curator backend, they are automatica
 | `memd init [path]` | Scaffold `.memory/` & register a project. Supports `--name <name>` and `--global` (sets up the fallback root). | `0` (Success), `2` (Config error) |
 | `memd sync` | Distill new session content into memory. Supports `--project <path>`, `--transcript <path>`, `--trigger <name>`, and `--dry-run`. | `0` (Success/No-op), `3` (Curator/distill failure) |
 | `memd sweep` | Periodic sweep to catch up all projects, ingest inbox files, and detect new git projects. Supports `--jobs <N>`. | `0` (Success), `1` (Any worker failed) |
-| `memd brief [path]` | Print the session-start brief (context injection). | Prints brief text to stdout. |
+| `memd brief [path]` | Print the session-start brief (context injection). Supports `--max-chars <N>` and `--topic <keyword>`. | Prints brief text to stdout. |
 | `memd status` | Display registry, backlog bytes, and last distill summaries. | Prints status details. |
 | `memd install-hooks` | Idempotently wire hooks into `~/.claude/settings.json`. | Configures hooks. |
 | `memd note` | Append a collision-safe note to the project or global inbox. Supports `-m "<message>"` and `--global`. | `0` (Success), `2` (Config error) |
@@ -284,7 +308,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-The suite consists of 148 automated unit and integration tests covering isolation, cursors, redaction, database parsing, atomic inbox publishing, retry policies, and curation quality.
+161 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, brief budgeting, and curation quality. Verified on Python 3.10 through 3.13.
 
 To run tests in a Nix-isolated environment:
 ```bash
