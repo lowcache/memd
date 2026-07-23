@@ -5,6 +5,7 @@ import datetime as dt
 import os
 import re
 import subprocess
+import sys
 
 from memd.config import (META_PATH, MEMORY_FILES, atomic_write, git_toplevel,
                          load_json, log, save_config, today)
@@ -211,6 +212,97 @@ def git_commit_memory(project_path, message):
             log(f"git commit failed in {top}: {r.stderr.strip()[:200]}")
     except (OSError, subprocess.TimeoutExpired) as e:
         log(f"git commit error in {top}: {e}")
+
+
+def init_memory_repo(mem, seed_msg):
+    if os.path.isdir(os.path.join(mem, ".git")):
+        return
+    for argv in (["init", "-q"],
+                 ["config", "user.name", "memd"],
+                 ["config", "user.email", "memd@localhost"],
+                 ["add", "-A"], ["commit", "-q", "-m", seed_msg]):
+        try:
+            r = subprocess.run(["git", "-C", mem] + argv, capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                log(f"git {argv[0]} failed in {mem}: {r.stderr.strip()[:200]}")
+                break
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log(f"git {argv[0]} error in {mem}: {e}")
+            break
+
+
+def migrate_parent_untrack(project_path):
+    top = git_toplevel(project_path)
+    if not top or top != project_path:
+        return
+    mem = os.path.join(project_path, ".memory")
+    if os.path.isdir(os.path.join(mem, ".git")):
+        return
+    
+    gitignore = os.path.join(top, ".gitignore")
+    try:
+        if os.path.exists(gitignore):
+            with open(gitignore, "r") as f:
+                content = f.read()
+            if ".memory/" not in content.splitlines():
+                with open(gitignore, "a") as f:
+                    if content and not content.endswith("\n"):
+                        f.write("\n")
+                    f.write(".memory/\n")
+        else:
+            with open(gitignore, "w") as f:
+                f.write(".memory/\n")
+    except OSError as e:
+        log(f"migration: failed to update .gitignore in {top}: {e}")
+
+    try:
+        r = subprocess.run(["git", "-C", top, "ls-files", "--", ".memory"],
+                           capture_output=True, text=True, timeout=30)
+        if r.stdout.strip():
+            subprocess.run(["git", "-C", top, "rm", "-r", "--cached", "--quiet", "--", ".memory"],
+                           capture_output=True, timeout=30)
+            print("notice: .memory/ was untracked and gitignored in the parent repo (please review/commit those changes)", file=sys.stderr)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"migration: git rm --cached failed in {top}: {e}")
+
+
+def memory_checkout_clean(project_path):
+    """True only if project_path/.memory is a TRACKED, clean git checkout — i.e.
+    every file under it is committed with no local edits, so its content lives in
+    git history (and, post-migration, the shared store) and it can be safely
+    replaced by a symlink without losing memory. Untracked, ignored-with-content,
+    dirty, or non-git .memory all return False (preserve it)."""
+    if not git_toplevel(project_path):
+        return False
+    try:
+        tracked = subprocess.run(["git", "-C", project_path, "ls-files", "--", ".memory"],
+                                 capture_output=True, text=True, timeout=30)
+        if tracked.returncode != 0 or not tracked.stdout.strip():
+            return False
+        status = subprocess.run(["git", "-C", project_path, "status", "--porcelain", "--", ".memory"],
+                                capture_output=True, text=True, timeout=30)
+        return status.returncode == 0 and status.stdout.strip() == ""
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def main_worktree_root(path):
+    try:
+        r = subprocess.run(["git", "-C", path, "rev-parse", "--git-common-dir"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            common_dir = r.stdout.strip()
+            if common_dir:
+                if os.path.isabs(common_dir):
+                    abs_common = common_dir
+                else:
+                    abs_common = os.path.abspath(os.path.join(path, common_dir))
+                if os.path.basename(abs_common) == ".git":
+                    return os.path.dirname(abs_common)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return path
+
 # --------------------------------------------------------------------------
 # brief (session-start context)
 # --------------------------------------------------------------------------

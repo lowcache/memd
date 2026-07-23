@@ -4,7 +4,7 @@
   <img src="assets/memd.png" alt="memd logo" />
 </p>
 
-[![Release](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/lowcache/memd)
+[![Release](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/lowcache/memd)
 [![Python Version Compatibility](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-brightgreen.svg)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Nix Flake](https://img.shields.io/badge/Nix-Flake-blueviolet.svg)](#nix-installation)
@@ -308,7 +308,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-161 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, brief budgeting, and curation quality. Verified on Python 3.10 through 3.13.
+166 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, brief budgeting, memory-repo decoupling + worktree sharing, and curation quality. Verified on Python 3.10 through 3.13.
 
 To run tests in a Nix-isolated environment:
 ```bash
@@ -319,3 +319,9 @@ Or run via `pytest` locally:
 ```bash
 python -m pytest tests/ -q
 ```
+
+---
+
+## Changelog
+
+- **0.3.0**: Each project's `.memory/` now gets its own standalone Git repository, decoupling memory history from code branches. Linked Git worktrees automatically share one physical `.memory` store via symlinks (never overwriting unsaved memory), and a migration helper untracks `.memory` from the parent repo on init.

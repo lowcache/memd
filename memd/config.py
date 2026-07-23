@@ -41,6 +41,7 @@ DEFAULT_CONFIG = {
                                     # single project). CLI --jobs overrides.
     "auto_scaffold": True,          # scaffold .memory/ in detected git-root projects
     "git_commit": True,             # commit .memory/ changes after each distill
+    "memory_own_repo": True,        # use a standalone git repo for .memory/ to decouple history
     "budgets": {                    # active-file size budgets (chars of body)
         "state.md": 10000,
         "decisions.md": 12000,

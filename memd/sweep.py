@@ -13,7 +13,8 @@ from memd.config import (CLAUDE_PROJECTS_DIR, CURSORS_PATH, HOME, META_PATH,
                          save_config)
 from memd.inbox import collect_inbox
 from memd.memory import (enforce_budget_mistakes, find_project,
-                         git_commit_memory, register, scaffold)
+                         git_commit_memory, register, scaffold,
+                         init_memory_repo)
 from memd.sync import source_pending, sync_project, transcript_files
 
 def write_global_index(cfg):
@@ -83,13 +84,7 @@ def ensure_global(cfg):
     # (not git_toplevel(mem)) so a git repo at $HOME can't make this think
     # ~/.memory is already versioned and skip its standalone init.
     if cfg.get("git_commit") and not os.path.isdir(os.path.join(mem, ".git")):
-        for argv in (["init", "-q"], ["add", "-A"],
-                     ["commit", "-q", "-m", "memd: seed global memory root"]):
-            try:
-                subprocess.run(["git", "-C", mem] + argv, capture_output=True, timeout=30)
-            except (OSError, subprocess.TimeoutExpired) as e:
-                log(f"global git init failed: {e}")
-                break
+        init_memory_repo(mem, "memd: seed global memory root")
     # Preserve any pre-existing entry (custom name/extra_sources); just flag it.
     entry = cfg["projects"].get(gr) or {"name": "global", "extra_sources": []}
     entry["global"] = True
