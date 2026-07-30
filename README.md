@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/lowcache/memd/main/assets/memd.png" alt="memd logo" />
 </p>
 
-[![Release](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/lowcache/memd)
+[![Release](https://img.shields.io/badge/version-0.3.2-blue.svg)](https://github.com/lowcache/memd)
 [![Python Version Compatibility](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-brightgreen.svg)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Nix Flake](https://img.shields.io/badge/Nix-Flake-blueviolet.svg)](#nix-installation)
@@ -80,17 +80,17 @@ Keeping the memory curated is only half the job. The models working in your code
 2.  **Don't edit the memory files.** The curator owns them and rewrites them on every pass — hand-edits just get overwritten.
 3.  **Send new facts through the inbox.** `memd note -m "..."`, or drop a file in `.memory/inbox/`. One fact per note.
 
-You don't have to write those instructions yourself. Scaffolding a project writes them into the project root, under every name the major tools look for — no assistant is assumed:
+You don't have to write those instructions yourself. `memd init` puts them in the project root, under the name your tools actually read — no assistant is assumed:
 
-| File | Read by |
-| :--- | :--- |
-| `AGENTS.md` | Codex, Cursor, Zed, Gemini CLI, and anything else on the [agents.md](https://agents.md) standard |
-| `CLAUDE.md` | Claude Code |
-| `GEMINI.md` | Gemini CLI / antigravity-cli |
+| File | Read by | Written |
+| :--- | :--- | :--- |
+| `AGENTS.md` | Codex, Cursor, Zed, Gemini CLI, and anything else on the [agents.md](https://agents.md) standard | always — it's the cross-tool standard |
+| `CLAUDE.md` | Claude Code | if `.claude/` exists here or in your home directory |
+| `GEMINI.md` | Gemini CLI / antigravity-cli | if `.gemini/` exists |
 
-**Your own files are never overwritten.** If a `CLAUDE.md` (or either of the others) already exists, memd leaves it exactly as it is and writes only the missing ones — so add the memd section to it yourself, or copy one of the generated files as a starting point. Delete whichever files correspond to tools you don't use.
+So a project picks up instructions for the tools you actually use, not for every assistant that exists. **Your own files are never overwritten** — if a `CLAUDE.md` already exists, memd leaves it exactly as it is and writes only the missing ones. Copy the memd section into yours, or keep both.
 
-For two more conventions memd does not write automatically — GitHub Copilot's `.github/copilot-instructions.md` and Cursor's `.cursor/rules/memd.mdc` — plus longer, richer versions of all of the above, see [`contrib/agents/`](contrib/agents/).
+For two conventions memd doesn't write — GitHub Copilot's `.github/copilot-instructions.md` and Cursor's `.cursor/rules/memd.mdc` — plus longer versions of all of the above, see [`contrib/agents/`](contrib/agents/).
 
 ### What's agent-agnostic (and what isn't yet)
 
@@ -104,7 +104,7 @@ The core of memd doesn't care which agent or model you use: the memory files are
 
 ## Guardrails Enforced by Code (Not the LLM)
 
-The curator model is useful but not trusted. The rules that keep memory intact live in plain Python, so a confused (or prompt-injected) model can't wreck the store:
+The curator model is useful but not trusted. The rules that keep the store *structurally* intact live in plain Python, so a confused or misled model can't corrupt, truncate, or silently rewrite your memory:
 
 1.  **Frontmatter required:** Every memory file must carry valid YAML frontmatter (`type`, `project`, `last_updated`, `status`), or the write is rejected.
 2.  **Mistakes are forever:** `mistakes.md` is append-only. The curator can add entries but never edit or delete old ones.
@@ -112,6 +112,8 @@ The curator model is useful but not trusted. The rules that keep memory intact l
 4.  **Size budgets:** Each file has a character cap (set in `config.json`). Overflow gets moved to `./.memory/archive/YYYY-MM.md`, oldest sections first.
 5.  **No races:** Per-project file locking (`flock`) keeps concurrent sweeps, hooks, and agents from corrupting each other's writes.
 6.  **Nothing skipped:** memd tracks how far it has read into each transcript and database, and only advances that marker after a successful distill and write — a failed run just gets retried from the same spot.
+
+What these rules do *not* do is judge the meaning of what the curator writes — the file bodies are free-form prose. Since memory is distilled from your sessions and fed back into later ones, content you worked on can influence what gets remembered. memd bounds this (memory is plain markdown under its own git history, so it's readable, diffable, and revertable) and the session brief labels memory as reference notes rather than instructions, but it's a real property of the design. [`SECURITY.md`](SECURITY.md) has the threat model and what to do about it.
 
 ---
 
@@ -145,6 +147,25 @@ The inbox has many writers and one reader that deletes what it consumes, so a sl
 6.  **Write-Once:** Never modify or reuse a published note.
 
 For complete writer/reader guidelines, see [INBOX-PROTOCOL.md](INBOX-PROTOCOL.md).
+
+---
+
+## How memd Uses Your Model
+
+Distilling means sending session content to an LLM, so it's worth being precise about what goes where and what it costs.
+
+**What gets sent.** Whatever is new in your transcripts since the last run, capped at `digest_cap_chars` (60,000 by default), plus the current contents of the four memory files. Credentials are scrubbed first — 13 patterns, [detailed below](#built-in-credential-redaction) — but that's shape-matching, not a guarantee.
+
+**Where it goes.** To whatever `curator_cmd` points at. Out of the box that's the `claude` CLI, which means your session content reaches Anthropic's API. Point it at a local model and nothing leaves the machine; [`contrib/curators/`](contrib/curators/) has a verified ollama wrapper and the backend contract. `memd status` always prints the backend in use, so you never have to infer it:
+
+```
+$ memd status
+curator      : claude (headless)  [models: haiku/sonnet]  — sends session content to the Anthropic API
+```
+
+**What it costs.** A distill runs when a session ends, and the sweep timer checks every 30 minutes for projects with new content. Most sweeps do nothing — a project is skipped unless it has unread transcript content or an inbox note, and transcripts touched in the last `quiet_seconds` (10 minutes) are left alone so an active session isn't digested mid-flight. When a distill does run it's one call, on `model_small` (haiku) unless the digest exceeds `escalate_chars` (15,000), which promotes it to `model_large` (sonnet). To spend less: raise `quiet_seconds`, lengthen the timer interval, or set both models to something cheap. To spend nothing, use a local backend.
+
+**What memd never does.** No network calls of its own, no telemetry, no phone-home. It reads session transcripts, inbox notes, and any `extra_sources` you configure — not your source code. It never executes anything from a transcript or from curator output. See [SECURITY.md](SECURITY.md).
 
 ### 4. Extra Custom Sources
 Additional text transcript sources (e.g. custom JSONL logs) can be registered per-project under the `projects.<path>.extra_sources` array in `config.json`.
@@ -229,19 +250,17 @@ Session transcripts have a bad habit of containing API keys. Before anything rea
 
 ---
 
-## Known Caveats
+## What memd Writes, and When
 
-Worth reading before you install.
+memd draws a hard line between what it needs in order to work and what changes your project. Automatic behaviour stays on its own side of that line.
 
-> [!IMPORTANT]
-> **If you are on PyPI 0.3.0, upgrade.** In 0.3.0 only `memd init` gave `.memory/` its own git repo — projects picked up *automatically* (by the session-start hook or the sweep) had their memory committed into the project's own git history, which you might then push somewhere public. Fixed in 0.3.1.
+**Automatically** — when the session-start hook or the sweep notices a git repo you're working in — memd creates `./.memory/` and registers the project. That directory is its own git repository, so memory history never enters your project's history, and the ignore rule goes in `.git/info/exclude`, which is local to your clone and untracked. Nothing you have committed is modified. Turn discovery off entirely with `"auto_scaffold": false`, or skip individual repos with `memd exclude <path>`.
 
-1.  **Auto-discovery is opt-out, not opt-in.** With the default config, any git repo you open your agent in gets `.memory/` scaffolded and registered. Use `memd exclude <path>` for specific repos, or `"auto_scaffold": false` to disable discovery entirely.
-2.  **Scaffolding writes instruction files into your project root** — `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md`, holding the memd memory contract. Existing files of those names are never overwritten, so your own instructions are safe; but on a fresh project you will find three new files. Delete the ones for tools you don't use.
-3.  **`memd install-hooks` writes the bare command `memd`** into `~/.claude/settings.json`. If memd lives in a venv that isn't on claude-code's `PATH`, edit the hook commands to the venv's absolute `bin/memd` path.
-4.  **Distill failures are quiet by design.** `memd sync` exits `3` and points at the log; the detail lives in `$XDG_STATE_HOME/memd/memd.log` (default `~/.local/state/memd/memd.log`). Nothing is lost when a distill fails — the backlog is preserved and replays on the next successful run.
-5.  **Small local curator models are unreliable.** They can fail to hold the JSON contract; memd retries with backoff and preserves the backlog, but distills get slow. See [contrib/curators/README.md](contrib/curators/README.md) for measured guidance.
-6.  **Linux is the tested platform.** memd is POSIX-only (`flock`-based locking); macOS is untested, Windows is not supported.
+**Only when you run `memd init`** does memd touch the project itself: it adds `.memory/` to your tracked `.gitignore` (so the rule is shared with collaborators) and writes the memory contract into the project root. `AGENTS.md` is always written, since it's the cross-tool standard; `CLAUDE.md` and `GEMINI.md` appear only if you actually use those tools. **Existing files of those names are never overwritten** — if you already have a `CLAUDE.md`, memd leaves it alone.
+
+Everything memd generates is plain markdown under git, so anything it got wrong is visible in a diff and revertable.
+
+**Platform:** POSIX only (`flock`-based locking). Linux is the tested platform; macOS is expected to work but is untested, and Windows is not supported.
 
 ---
 
@@ -339,7 +358,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-173 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, and curation quality. Verified on Python 3.10 through 3.14.
+175 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, and curation quality. Verified on Python 3.10 through 3.14.
 
 To run tests in a Nix-isolated environment:
 ```bash

@@ -2,6 +2,7 @@
 installation."""
 
 import json
+import shutil
 import os
 import subprocess
 import sys
@@ -98,15 +99,42 @@ HOOK_DEFS = {
 }
 
 
+def hook_command_prefix():
+    """The command claude-code should run for a hook.
+
+    A bare "memd" only works if memd happens to be on the PATH claude-code was
+    started with — which it is not for a venv or pipx install invoked from a
+    different shell. Resolve the running executable instead, so the hooks keep
+    working regardless of how memd was installed. Falls back to "memd" only if
+    the path cannot be determined."""
+    argv0 = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    if argv0 and os.path.exists(argv0) and not argv0.endswith(".py"):
+        return argv0
+    found = shutil.which("memd")
+    if found:
+        return found
+    if argv0 and os.path.exists(argv0):
+        # running from a source checkout (memd.py shim): keep the interpreter
+        # that is running now, or the shim would be executed by whatever
+        # python3 happens to be first on claude-code's PATH.
+        return f"{sys.executable or 'python3'} {argv0}"
+    return "memd"
+
+
 def cmd_install_hooks():
     settings = load_json(CLAUDE_SETTINGS, {})
     hooks = settings.setdefault("hooks", {})
+    prefix = hook_command_prefix()
     changed = False
     for event, sub in HOOK_DEFS.items():
-        cmdstr = f"memd {sub}"
+        cmdstr = f"{prefix} {sub}"
         entries = hooks.setdefault(event, [])
+        # Match on the subcommand, not the full string: an install that predates
+        # absolute-path resolution wrote a bare "memd hook session-start", and
+        # comparing whole commands would not recognise it and would append a
+        # second, duplicate hook.
         present = any(
-            cmdstr in h.get("command", "")
+            h.get("command", "").rstrip().endswith(sub)
             for e in entries for h in e.get("hooks", [])
         )
         if not present:

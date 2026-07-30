@@ -8,6 +8,36 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-30
+
+### Added
+
+- SECURITY.md: data flow, credential-redaction limits, trust model, and the
+  prompt-injection/persistent-context threat model with mitigations
+- `memd status` prints the configured curator backend and models, so where
+  session content is sent is visible in the tool rather than only in the docs
+
+### Changed
+
+- Automatic discovery no longer writes anything into the project root. It
+  creates the .memory store and registers the project; instruction files and
+  the tracked .gitignore entry are now written only by an explicit `memd init`.
+  scaffold() creates the memory store only, and write_agent_files() is separate
+- `memd init` writes AGENTS.md always, and CLAUDE.md or GEMINI.md only when
+  that tool is detected, instead of all three unconditionally
+- `memd install-hooks` writes the resolved absolute path to the memd
+  executable rather than a bare `memd`, so hooks work for venv and pipx
+  installs. Existing bare-command hooks are recognised and not duplicated
+- The session brief labels memory as reference notes distilled from earlier
+  sessions rather than instructions, as defence in depth against a directive
+  reaching a memory file and persisting across sessions
+
+### Fixed
+
+- An explicit `memd init` after automatic discovery now records the ignore rule
+  in the shared .gitignore instead of returning early because .memory already
+  had its own repo
+
 ## [0.3.1] - 2026-07-30
 
 ### Added

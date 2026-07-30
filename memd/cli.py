@@ -19,10 +19,24 @@ from memd.sync import source_pending, sync_project, transcript_files
 # --------------------------------------------------------------------------
 
 
+def describe_backend(cfg):
+    """One line naming where digests actually go. Distilling ships session
+    content to whatever backend is configured, so which one it is should be
+    visible in the tool, not only in the docs."""
+    cmd = cfg.get("curator_cmd") or []
+    models = f"{cfg.get('model_small')}/{cfg.get('model_large')}"
+    if cmd:
+        return f"{' '.join(cmd)}  [models: {models}]"
+    return (f"{cfg.get('claude_bin', 'claude')} (headless)  [models: {models}]"
+            "  — sends session content to the Anthropic API")
+
+
 def cmd_status(cfg):
     ensure_global(cfg)
     meta = load_json(META_PATH, {})
     cursors = load_json(CURSORS_PATH, {})
+    print(f"curator      : {describe_backend(cfg)}")
+    print()
     if not cfg["projects"]:
         print("no projects registered (run: memd init [path])")
         return
@@ -121,7 +135,8 @@ def main():
         path = os.path.realpath(args.path)
         # shared_ignore: an explicit init may edit the tracked .gitignore, so the
         # rule travels with the repo. Auto-discovery deliberately does not.
-        created = provision_project(cfg, path, args.name, shared_ignore=True)
+        created = provision_project(cfg, path, args.name, shared_ignore=True,
+                                   agent_files=True)
         # Baseline: start memory from now. Pre-existing transcripts are
         # presumed covered by existing memory (or not worth back-filling).
         skipped = 0

@@ -153,41 +153,94 @@ def test_auto_scaffold_does_not_commit_into_parent_repo(memd, env, tmp_path):
     assert "memd: distill" in r.stdout
 
 
-def test_agent_files_land_in_project_root(memd, tmp_path):
+def test_scaffold_creates_only_the_memory_store(memd, tmp_path):
+    """scaffold() creates what memd needs to run and nothing else. Writing into
+    the project root is a change to the user's workspace and belongs to the
+    explicit path only."""
     proj = tmp_path / "proj"
     proj.mkdir()
     memd.scaffold(str(proj), "proj")
+    assert (proj / ".memory" / "state.md").exists()
     for fname in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"):
-        assert (proj / fname).exists(), f"{fname} not written to project root"
-        assert ".memory/inbox/" in (proj / fname).read_text()
+        assert not (proj / fname).exists(), f"scaffold() wrote {fname}"
     assert not (proj / ".model").exists(), ".model/ is not memd's to create"
 
 
-def test_scaffold_never_overwrites_existing_agent_files(memd, tmp_path):
-    """CLAUDE.md and friends are commonly long, hand-written files. Scaffolding
-    must add the memd contract only where there is nothing to destroy."""
+def test_agent_files_written_for_detected_tools(memd, tmp_path, monkeypatch):
+    """AGENTS.md is the cross-tool standard and is always written; the
+    tool-specific names appear only where that tool is actually in use."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    created = memd.write_agent_files(str(proj))
+
+    assert (proj / "AGENTS.md").exists()
+    assert (proj / "CLAUDE.md").exists(), "~/.claude present but CLAUDE.md missing"
+    assert not (proj / "GEMINI.md").exists(), "wrote GEMINI.md with no gemini in use"
+    assert ".memory/inbox/" in (proj / "AGENTS.md").read_text()
+    assert len(created) == 2
+
+
+def test_agent_files_never_overwrite(memd, tmp_path, monkeypatch):
+    """CLAUDE.md and friends are commonly long, hand-written files."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
     proj = tmp_path / "proj"
     proj.mkdir()
     mine = "# My own instructions\n\nDo not clobber me.\n"
     (proj / "CLAUDE.md").write_text(mine)
 
-    created = memd.scaffold(str(proj), "proj")
+    created = memd.write_agent_files(str(proj))
 
     assert (proj / "CLAUDE.md").read_text() == mine
     assert str(proj / "CLAUDE.md") not in created
-    # the other conventions still get written
     assert (proj / "AGENTS.md").exists()
-    assert (proj / "GEMINI.md").exists()
 
 
-def test_global_root_gets_no_agent_files(memd, tmp_path):
-    """The global root is a memory store, not a project anyone works in."""
-    ghome = tmp_path / "ghome"
-    ghome.mkdir()
-    memd.scaffold(str(ghome), "global", agent_files=False)
-    assert (ghome / ".memory" / "state.md").exists()
+def test_auto_discovery_writes_nothing_into_project_root(memd, tmp_path, monkeypatch):
+    """The consent boundary: automatic discovery provisions the memory store
+    and leaves the workspace alone."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cfg = {"memory_own_repo": True, "git_commit": True, "projects": {}}
+    memd.provision_project(cfg, str(proj))  # defaults = the automatic path
+
+    assert (proj / ".memory" / "state.md").exists()
     for fname in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"):
-        assert not (ghome / fname).exists()
+        assert not (proj / fname).exists(), f"auto-discovery wrote {fname}"
+
+
+def test_explicit_init_upgrades_ignore_after_auto_discovery(memd, tmp_path):
+    """A project picked up automatically has the ignore rule only in the
+    clone-local .git/info/exclude. Running `memd init` later is the user asking
+    for it in the shared .gitignore, and must not be a no-op just because
+    .memory already has its own repo."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    subprocess.run(["git", "-C", str(proj), "init", "-q"])
+    subprocess.run(["git", "-C", str(proj), "config", "user.email", "t@t"])
+    subprocess.run(["git", "-C", str(proj), "config", "user.name", "t"])
+    (proj / "code.py").write_text("x\n")
+    subprocess.run(["git", "-C", str(proj), "add", "-A"], capture_output=True)
+    subprocess.run(["git", "-C", str(proj), "commit", "-q", "-m", "init"],
+                   capture_output=True)
+    cfg = {"memory_own_repo": True, "git_commit": True, "projects": {}}
+
+    memd.provision_project(cfg, str(proj))                       # automatic
+    assert ".memory/" in (proj / ".git" / "info" / "exclude").read_text()
+    assert not (proj / ".gitignore").exists()
+
+    memd.provision_project(cfg, str(proj), shared_ignore=True)   # explicit init
+    assert ".memory/" in (proj / ".gitignore").read_text()
 
 
 def test_worktree_preserves_unsaved_memory(memd, env, tmp_path, monkeypatch):
