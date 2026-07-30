@@ -13,8 +13,9 @@ and this project adheres to
 - contrib/curators/ with the curator backend contract and wrapper scripts for
   running memd against a non-Claude model: ollama (verified) and the gemini
   CLI (unverified, see its header)
-- GitHub Actions CI: pytest on Python 3.10 through 3.13, build plus twine
+- GitHub Actions CI: pytest on Python 3.10 through 3.14, build plus twine
   check, shellcheck on the contrib wrappers, and nix flake check
+- Python 3.14 declared supported; the suite passes on it
 
 ### Fixed
 

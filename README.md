@@ -5,7 +5,7 @@
 </p>
 
 [![Release](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/lowcache/memd)
-[![Python Version Compatibility](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-brightgreen.svg)](#installation)
+[![Python Version Compatibility](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-brightgreen.svg)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Nix Flake](https://img.shields.io/badge/Nix-Flake-blueviolet.svg)](#nix-installation)
 
@@ -326,7 +326,7 @@ Refer to [contrib/README.md](contrib/README.md) for detailed customization and u
 
 ### Manual Installation (no pip, no Nix)
 
-`memd` is compatible with **Python 3.10 to 3.13** and uses standard library packages exclusively, so a plain clone runs as-is:
+`memd` is compatible with **Python 3.10 to 3.14** and uses standard library packages exclusively, so a plain clone runs as-is:
 
 ```bash
 git clone https://github.com/lowcache/memd && cd memd
@@ -339,7 +339,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-169 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, and curation quality. Verified on Python 3.10 through 3.13.
+170 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, and curation quality. Verified on Python 3.10 through 3.14.
 
 To run tests in a Nix-isolated environment:
 ```bash
