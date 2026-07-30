@@ -47,7 +47,7 @@ def test_load_config_unknown_keys_pass_through(memd):
 def test_load_config_does_not_mutate_defaults(memd):
     write_cfg(memd, {"model_small": "custom-model"})
     memd.load_config()
-    assert memd.DEFAULT_CONFIG["model_small"] == "haiku"
+    assert memd.DEFAULT_CONFIG["model_small"] == "sonnet"
 
 
 def test_default_redact_extra_patterns_is_empty_list(memd):

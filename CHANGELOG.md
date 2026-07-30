@@ -10,12 +10,21 @@ and this project adheres to
 
 ### Changed
 
+- `model_small` now defaults to `sonnet` rather than `haiku`, so both tiers ship
+  the same capable model. Curation quality is the product, and someone trying
+  memd for the first time cannot distinguish a weak default model from a weak
+  tool — they stop using it without ever finding the config key. Set
+  `model_small` to `haiku` to trade quality back for cost
 - README badges are live rather than hardcoded: CI status from GitHub Actions,
   and version plus supported Python versions from PyPI. A hand-written version
   badge silently goes stale, and needed a release gate to compensate
 
 ### Fixed
 
+- Digests escalate to `model_large` based on size alone. Escalation was gated on
+  the trigger being session-end or manual, so a sweep never escalated — and a
+  sweep carries the largest backlogs, which is where a small model does worst.
+  Invisible while both tiers share a model; wrong for anyone who tiers them
 - The release script reported "tag is free on origin" when the remote could not
   be reached at all, since any non-zero `git ls-remote` exit was read as
   absence. An unreachable remote now warns instead of passing a gate whose

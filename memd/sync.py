@@ -155,8 +155,12 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
             collapse_repeats("\n\n--- next session span ---\n\n".join(digests)),
             cfg["digest_cap_chars"]))
         inbox_notes = [redact(n) for n in inbox_notes]
+        # Escalate on size alone, whatever triggered the distill. Restricting
+        # this to session-end/manual meant a sweep never escalated — and a sweep
+        # carries the biggest backlogs (days of unread transcripts, up to
+        # digest_cap_chars), which is exactly where the small model does worst.
         model = cfg["model_small"]
-        if trigger in ("session-end", "manual") and len(digest) > cfg["escalate_chars"]:
+        if len(digest) > cfg["escalate_chars"]:
             model = cfg["model_large"]
 
         memory = read_memory(project_path)

@@ -31,9 +31,15 @@ DEFAULT_CONFIG = {
                                     # contain one JSON object (fences/prose ok).
                                     # Empty -> claude_bin headless invocation.
     "antigravity_dir": os.path.join(HOME, ".gemini", "antigravity-cli"),
-    "model_small": "haiku",
+    # Both tiers default to the same capable model, deliberately. Curation is
+    # the product, and someone evaluating memd for the first time cannot tell
+    # "this tool is mediocre" from "this tool's default model is mediocre" —
+    # they just stop using it, having never found the config key. Good distills
+    # out of the box are worth more than the token savings. Set model_small to
+    # something cheaper (e.g. "haiku") once you trust it.
+    "model_small": "sonnet",
     "model_large": "sonnet",
-    "escalate_chars": 15000,        # session-end digests above this go to model_large
+    "escalate_chars": 15000,        # digests above this go to model_large
     "digest_cap_chars": 60000,      # max transcript digest fed to the model
     "quiet_seconds": 600,           # sweep skips transcripts modified more recently
     "sweep_jobs": 4,                # parallel project syncs per sweep (threads;

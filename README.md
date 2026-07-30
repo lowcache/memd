@@ -99,7 +99,7 @@ The core of memd doesn't care which agent or model you use: the memory files are
 
 *   **Automatic transcript ingestion** understands `claude-code` session logs and `antigravity-cli` databases. Other agents' transcripts can be wired in per-project via `extra_sources` (plain text / JSONL), or their facts routed through the inbox — there is no built-in parser for them yet.
 *   **Lifecycle hooks** (`memd install-hooks`, session-start brief injection) exist only for `claude-code`. Every other tool relies on the periodic sweep timer instead: slower cadence, same result.
-*   **The default curator is the `claude` CLI**, and the default `model_small`/`model_large` names (`haiku`/`sonnet`) assume it. Set `curator_cmd` to distill with a local model, another vendor's CLI, or anything else — [`contrib/curators/`](contrib/curators/) has ready-made wrappers and the backend contract, so you can run memd with no Anthropic dependency at all.
+*   **The default curator is the `claude` CLI**, and the default `model_small`/`model_large` names (both `sonnet`) assume it. Set `curator_cmd` to distill with a local model, another vendor's CLI, or anything else — [`contrib/curators/`](contrib/curators/) has ready-made wrappers and the backend contract, so you can run memd with no Anthropic dependency at all.
 
 ---
 
@@ -161,10 +161,12 @@ Distilling means sending session content to an LLM, so it's worth being precise 
 
 ```
 $ memd status
-curator      : claude (headless)  [models: haiku/sonnet]  — sends session content to the Anthropic API
+curator      : claude (headless)  [models: sonnet/sonnet]  — sends session content to the Anthropic API
 ```
 
-**What it costs.** A distill runs when a session ends, and the sweep timer checks every 30 minutes for projects with new content. Most sweeps do nothing — a project is skipped unless it has unread transcript content or an inbox note, and transcripts touched in the last `quiet_seconds` (10 minutes) are left alone so an active session isn't digested mid-flight. When a distill does run it's one call, on `model_small` (haiku) unless the digest exceeds `escalate_chars` (15,000), which promotes it to `model_large` (sonnet). To spend less: raise `quiet_seconds`, lengthen the timer interval, or set both models to something cheap. To spend nothing, use a local backend.
+**What it costs.** A distill runs when a session ends, and the sweep timer checks every 30 minutes for projects with new content. Most sweeps do nothing — a project is skipped unless it has unread transcript content or an inbox note, and transcripts touched in the last `quiet_seconds` (10 minutes) are left alone so an active session isn't digested mid-flight. When a distill does run it's one call, on `model_small` unless the digest exceeds `escalate_chars` (15,000), which promotes it to `model_large`.
+
+Both default to `sonnet`, which is a deliberate choice: curation quality *is* the product, and a weak default model is indistinguishable from a weak tool to anyone trying memd for the first time. It costs more than the cheapest option. To spend less, set `model_small` to `haiku` — routine distills drop to it while large backlogs still escalate. To spend nothing, use a local backend.
 
 **What memd never does.** No network calls of its own, no telemetry, no phone-home. It reads session transcripts, inbox notes, and any `extra_sources` you configure — not your source code. It never executes anything from a transcript or from curator output. See [SECURITY.md](SECURITY.md).
 
@@ -194,9 +196,9 @@ Configuration is stored in `$XDG_CONFIG_HOME/memd/config.json` (defaults to `~/.
 | `claude_bin` | `string` | `"claude"` | Name or path of the `claude-code` binary. |
 | `curator_cmd` | `array` | `[]` | Override list of arguments to invoke a custom curator backend (e.g., `["nix", "run", ".#", "--", "status"]`). Substitutes `{model}`. If empty, falls back to the headless `claude_bin` command. |
 | `antigravity_dir` | `string` | `"~/.gemini/antigravity-cli"` | Directory containing native SQLite database conversations. |
-| `model_small` | `string` | `"haiku"` | Model used for small/routine transcript distills. |
-| `model_large` | `string` | `"sonnet"` | Model used for large/complex session distills. |
-| `escalate_chars` | `integer` | `15000` | Character count above which digests are run with `model_large`. |
+| `model_small` | `string` | `"sonnet"` | Model used for routine distills. Set to `"haiku"` to cut cost. |
+| `model_large` | `string` | `"sonnet"` | Model used once a digest exceeds `escalate_chars`. |
+| `escalate_chars` | `integer` | `15000` | Digest size above which `model_large` is used, whatever triggered the distill. |
 | `digest_cap_chars` | `integer` | `60000` | Maximum length of transcript digest fed to the LLM. |
 | `quiet_seconds` | `integer` | `600` | Skip digesting transcripts modified within this cooldown period. |
 | `sweep_jobs` | `integer` | `4` | Number of worker threads for parallel sweeps. |
@@ -369,7 +371,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-180 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, silent-ingestion-breakage detection, and curation quality. Verified on Python 3.10 through 3.14.
+184 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, silent-ingestion-breakage detection, and curation quality. Verified on Python 3.10 through 3.14.
 
 To run tests in a Nix-isolated environment:
 ```bash
