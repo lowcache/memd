@@ -75,7 +75,10 @@ BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [ "$BRANCH" = "$EXPECT_BRANCH" ] || [ "$ALLOW_BRANCH" = 1 ]; then
   ok "on branch $BRANCH"
 else
-  bad "on branch '$BRANCH', expected '$EXPECT_BRANCH' (pass --allow-branch to override)"
+  bad "on branch '$BRANCH', expected '$EXPECT_BRANCH'"
+  echo "         Releases are cut from $EXPECT_BRANCH so the tag points at it:"
+  echo "           git checkout $EXPECT_BRANCH && git merge --ff-only $BRANCH"
+  echo "         Or pass --allow-branch to tag '$BRANCH' instead."
 fi
 
 if [ -z "$(git status --porcelain)" ]; then
@@ -102,9 +105,37 @@ if [ -z "$tracked_private" ]; then
 else
   bad "tracked personal files: $tracked_private"
 fi
+# ---------------------------------------------------------------- tooling
+# pytest, build and twine are not runtime dependencies of memd and are absent
+# from the system interpreter on plenty of distributions (NixOS, Debian, any
+# PEP 668 install). A release must not be blocked by that, so provision a
+# cached virtualenv and run the tooling out of it.
+step "Release tooling"
+PY=python3
+has_tools() { "$1" -c 'import pytest, build, twine' >/dev/null 2>&1; }
+TOOLVENV="${XDG_CACHE_HOME:-$HOME/.cache}/memd-release-venv"
+if has_tools "$PY"; then
+  ok "pytest, build and twine available in $($PY -c 'import sys; print(sys.executable)')"
+elif has_tools "$TOOLVENV/bin/python"; then
+  PY="$TOOLVENV/bin/python"
+  ok "using cached release tooling at $TOOLVENV"
+else
+  warn "pytest/build/twine missing from python3; provisioning $TOOLVENV"
+  if python3 -m venv "$TOOLVENV" >/tmp/memd-release-tooling.log 2>&1 &&
+     "$TOOLVENV/bin/pip" -q install --upgrade pip pytest build twine \
+        >>/tmp/memd-release-tooling.log 2>&1 &&
+     has_tools "$TOOLVENV/bin/python"; then
+    PY="$TOOLVENV/bin/python"
+    ok "provisioned release tooling at $TOOLVENV"
+  else
+    bad "could not provision pytest/build/twine — see /tmp/memd-release-tooling.log"
+    tail -5 /tmp/memd-release-tooling.log 2>/dev/null
+  fi
+fi
+
 # ---------------------------------------------------------------- test suite
 step "Test suite"
-if python3 -m pytest tests/ -q >/tmp/memd-release-tests.log 2>&1; then
+if "$PY" -m pytest tests/ -q >/tmp/memd-release-tests.log 2>&1; then
   ok "$(tail -1 /tmp/memd-release-tests.log)"
 else
   bad "pytest failed — see /tmp/memd-release-tests.log"; tail -15 /tmp/memd-release-tests.log
@@ -129,7 +160,7 @@ fi
 # ---------------------------------------------------------------- build
 step "Build and inspect artifacts"
 rm -rf dist build ./*.egg-info
-if python3 -m build -q >/tmp/memd-release-build.log 2>&1; then
+if "$PY" -m build -q >/tmp/memd-release-build.log 2>&1; then
   ok "built sdist + wheel"
 else
   bad "build failed — see /tmp/memd-release-build.log"
@@ -137,7 +168,7 @@ else
 fi
 
 if [ -d dist ]; then
-  if python3 -m twine check dist/* >/dev/null 2>&1; then
+  if "$PY" -m twine check dist/* >/dev/null 2>&1; then
     ok "twine check passed"
   else
     bad "twine check failed"
@@ -265,7 +296,7 @@ ok "tag pushed"
 
 step "Uploading to PyPI"
 confirm "Upload to PyPI now? A version cannot be replaced once uploaded."
-python3 -m twine upload dist/*
+"$PY" -m twine upload dist/*
 ok "uploaded"
 
 # ---------------------------------------------------------------- post-release
