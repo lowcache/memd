@@ -54,10 +54,16 @@ if grep -q "^## \[$VERSION\]" CHANGELOG.md; then
 else
   bad "CHANGELOG.md has no '## [$VERSION]' section"
 fi
-if grep -q "badge/version-$VERSION-" README.md; then
-  ok "README version badge matches"
+# The README uses a live PyPI badge, which cannot go stale, so there is nothing
+# to check in the normal case. Still fail on a hardcoded version badge that
+# disagrees with the release — if one is ever reintroduced, it must be right.
+hardcoded=$(grep -oE 'badge/version-[0-9]+\.[0-9]+\.[0-9]+-' README.md || true)
+if [ -z "$hardcoded" ]; then
+  ok "README uses a live version badge (nothing to drift)"
+elif echo "$hardcoded" | grep -q "badge/version-$VERSION-"; then
+  ok "README hardcoded version badge matches"
 else
-  bad "README version badge is not $VERSION"
+  bad "README hardcoded version badge is $hardcoded, expected $VERSION"
 fi
 if grep -q "^## \[Unreleased\]$" CHANGELOG.md; then
   # An Unreleased section with content means changes are about to ship unlogged.
@@ -91,11 +97,19 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
 else
   ok "tag $TAG is free locally"
 fi
-if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
-  bad "tag $TAG already exists on origin — bump the version"
-else
-  ok "tag $TAG is free on origin"
-fi
+# git ls-remote exits 0 when the tag exists and 2 when it does not. Any other
+# code means the remote could not be reached — which must not be reported as
+# "free", or an unreachable origin would silently pass a gate whose entire job
+# is to stop a duplicate release.
+# `|| rc=$?` is required: under `set -e` a bare failing command aborts the
+# script, and this one is expected to fail whenever the tag is absent.
+rc=0
+git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1 || rc=$?
+case $rc in
+  0) bad "tag $TAG already exists on origin — bump the version" ;;
+  2) ok "tag $TAG is free on origin" ;;
+  *) warn "could not reach origin to check for tag $TAG — verify by hand: git ls-remote --tags origin $TAG" ;;
+esac
 
 # ---------------------------------------------- personal data (the 2026-07-23 incident)
 step "Personal data not tracked"

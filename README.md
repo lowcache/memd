@@ -4,8 +4,9 @@
   <img src="https://raw.githubusercontent.com/lowcache/memd/main/assets/memd.png" alt="memd logo" />
 </p>
 
-[![Release](https://img.shields.io/badge/version-0.3.3-blue.svg)](https://github.com/lowcache/memd)
-[![Python Version Compatibility](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-brightgreen.svg)](#installation)
+[![CI](https://github.com/lowcache/memd/actions/workflows/ci.yml/badge.svg)](https://github.com/lowcache/memd/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/memd.svg)](https://pypi.org/project/memd/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/memd.svg)](https://pypi.org/project/memd/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Nix Flake](https://img.shields.io/badge/Nix-Flake-blueviolet.svg)](#nix-installation)
 
