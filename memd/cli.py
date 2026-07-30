@@ -119,7 +119,9 @@ def main():
         sys.exit(2)  # config error
     elif args.cmd == "init":
         path = os.path.realpath(args.path)
-        created = provision_project(cfg, path, args.name)
+        # shared_ignore: an explicit init may edit the tracked .gitignore, so the
+        # rule travels with the repo. Auto-discovery deliberately does not.
+        created = provision_project(cfg, path, args.name, shared_ignore=True)
         # Baseline: start memory from now. Pre-existing transcripts are
         # presumed covered by existing memory (or not worth back-filling).
         skipped = 0

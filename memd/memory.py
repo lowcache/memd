@@ -66,22 +66,44 @@ SKELETONS = {
     "todo.md": "# Open Tasks\n\n_No tasks recorded yet._",
 }
 
-MODEL_STUB = """\
-# Project Instructions
-
+_MEMORY_PROTOCOL = """\
 ## Memory protocol (managed by memd)
 Read `./.memory/state.md`, `decisions.md`, `mistakes.md`, and `todo.md` before
 substantive work. They are distilled automatically after sessions — keep them
 authoritative. To leave an explicit note for the memory curator (from any CLI,
 agent, or swarm member), write a markdown file into `./.memory/inbox/`.
+
+Do not hand-edit the four memory files; the curator rewrites them on every pass.
 """
 
+# One instruction file per convention, written to the project root where each
+# tool actually reads it, so a scaffolded project does not presume any
+# particular assistant. Same protocol text throughout; only the trailing note
+# differs. An existing file of any of these names is never touched — they are
+# commonly hand-written and long.
+AGENT_FILES = {
+    "AGENTS.md": "# Project Instructions\n\n" + _MEMORY_PROTOCOL + """
+Read by tools following the [agents.md](https://agents.md) standard: Codex,
+Cursor, Zed, Gemini CLI, and others.
+""",
+    "CLAUDE.md": "# Project Instructions\n\n" + _MEMORY_PROTOCOL + """
+Read by Claude Code. With memd's hooks installed the session-start brief is
+injected automatically, so this file mainly states the contract for humans and
+subagents.
+""",
+    "GEMINI.md": "# Project Instructions\n\n" + _MEMORY_PROTOCOL + """
+Read by the Gemini CLI / antigravity-cli. Those tools have no memd lifecycle
+hooks, so memory refreshes on the sweep timer rather than at session end.
+""",
+}
 
-def scaffold(path, name=None, model_stub=True):
-    """Create .memory/ (+ optional .model/ stub) for a project; safe on existing dirs.
 
-    model_stub=False for the global root: it is not a project with agent
-    instructions, just a memory store, so no .model/CLAUDE.md is written."""
+def scaffold(path, name=None, agent_files=True):
+    """Create .memory/ (+ root agent instruction files) for a project; safe on
+    existing dirs.
+
+    agent_files=False for the global root: it is not a project anyone works in,
+    just a memory store, so it gets no instruction files."""
     name = name or os.path.basename(path.rstrip("/")) or path
     mem = os.path.join(path, ".memory")
     created = []
@@ -100,13 +122,12 @@ def scaffold(path, name=None, model_stub=True):
             ftype = fname.split(".")[0]
             write_memory_file(fpath, skeleton, name, ftype)
             created.append(fpath)
-    if model_stub:
-        model_dir = os.path.join(path, ".model")
-        model_md = os.path.join(model_dir, "CLAUDE.md")
-        if not os.path.exists(model_md):
-            os.makedirs(model_dir, exist_ok=True)
-            atomic_write(model_md, MODEL_STUB)
-            created.append(model_md)
+    if agent_files:
+        for fname, text in AGENT_FILES.items():
+            fpath = os.path.join(path, fname)
+            if not os.path.exists(fpath):
+                atomic_write(fpath, text)
+                created.append(fpath)
     return created
 def register(cfg, path, name=None):
     path = os.path.realpath(path)
@@ -232,29 +253,50 @@ def init_memory_repo(mem, seed_msg):
             break
 
 
-def migrate_parent_untrack(project_path):
+def _ignore_file(top, shared):
+    """Where to record the .memory/ ignore rule.
+
+    shared=True  -> .gitignore: tracked, committed, shared with collaborators.
+                    Appropriate when the user explicitly ran `memd init`.
+    shared=False -> .git/info/exclude: local to this clone and untracked, so
+                    memd never dirties a working tree the user did not ask it
+                    to touch. Used by the automatic discovery paths."""
+    if shared:
+        return os.path.join(top, ".gitignore")
+    try:
+        r = subprocess.run(["git", "-C", top, "rev-parse", "--git-path", "info/exclude"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            p = r.stdout.strip()
+            return p if os.path.isabs(p) else os.path.join(top, p)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def migrate_parent_untrack(project_path, shared_ignore=True):
     top = git_toplevel(project_path)
     if not top or top != project_path:
         return
     mem = os.path.join(project_path, ".memory")
     if os.path.isdir(os.path.join(mem, ".git")):
         return
-    
-    gitignore = os.path.join(top, ".gitignore")
-    try:
-        if os.path.exists(gitignore):
-            with open(gitignore, "r") as f:
-                content = f.read()
+
+    ignore_path = _ignore_file(top, shared_ignore)
+    if ignore_path:
+        try:
+            os.makedirs(os.path.dirname(ignore_path), exist_ok=True)
+            content = ""
+            if os.path.exists(ignore_path):
+                with open(ignore_path, "r") as f:
+                    content = f.read()
             if ".memory/" not in content.splitlines():
-                with open(gitignore, "a") as f:
+                with open(ignore_path, "a") as f:
                     if content and not content.endswith("\n"):
                         f.write("\n")
                     f.write(".memory/\n")
-        else:
-            with open(gitignore, "w") as f:
-                f.write(".memory/\n")
-    except OSError as e:
-        log(f"migration: failed to update .gitignore in {top}: {e}")
+        except OSError as e:
+            log(f"migration: failed to update {ignore_path} in {top}: {e}")
 
     try:
         r = subprocess.run(["git", "-C", top, "ls-files", "--", ".memory"],
@@ -262,7 +304,9 @@ def migrate_parent_untrack(project_path):
         if r.stdout.strip():
             subprocess.run(["git", "-C", top, "rm", "-r", "--cached", "--quiet", "--", ".memory"],
                            capture_output=True, timeout=30)
-            print("notice: .memory/ was untracked and gitignored in the parent repo (please review/commit those changes)", file=sys.stderr)
+            print(f"notice: .memory/ was untracked in {top} and is now ignored "
+                  f"via {ignore_path or 'git'}; review and commit that change",
+                  file=sys.stderr)
     except (OSError, subprocess.TimeoutExpired) as e:
         log(f"migration: git rm --cached failed in {top}: {e}")
 
@@ -287,7 +331,7 @@ def memory_checkout_clean(project_path):
         return False
 
 
-def provision_project(cfg, path, name=None):
+def provision_project(cfg, path, name=None, shared_ignore=False):
     """Scaffold + git-provision + register a project. The ONE entry point for
     bringing a project under memd management.
 
@@ -299,6 +343,11 @@ def provision_project(cfg, path, name=None):
     whatever remote they push). That is memory leaking into someone else's repo,
     so the provisioning is part of creation, not a flag on it.
 
+    shared_ignore records the ignore rule in the tracked .gitignore rather than
+    the clone-local .git/info/exclude. Default False: automatic discovery must
+    not dirty a working tree the user never asked memd to touch. `memd init`
+    passes True, where editing .gitignore is what the user asked for.
+
     Returns the list of created paths."""
     path = os.path.realpath(path)
     mem = os.path.join(path, ".memory")
@@ -309,7 +358,7 @@ def provision_project(cfg, path, name=None):
     created = scaffold(path, name)
 
     if cfg.get("memory_own_repo") and cfg.get("git_commit"):
-        migrate_parent_untrack(path)
+        migrate_parent_untrack(path, shared_ignore=shared_ignore)
         main_root = main_worktree_root(path)
         if main_root != path:
             # Linked worktree: share the main worktree's single store via a

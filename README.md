@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/lowcache/memd/main/assets/memd.png" alt="memd logo" />
 </p>
 
-[![Release](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/lowcache/memd)
+[![Release](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/lowcache/memd)
 [![Python Version Compatibility](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-brightgreen.svg)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Nix Flake](https://img.shields.io/badge/Nix-Flake-blueviolet.svg)](#nix-installation)
@@ -80,17 +80,17 @@ Keeping the memory curated is only half the job. The models working in your code
 2.  **Don't edit the memory files.** The curator owns them and rewrites them on every pass — hand-edits just get overwritten.
 3.  **Send new facts through the inbox.** `memd note -m "..."`, or drop a file in `.memory/inbox/`. One fact per note.
 
-You don't have to write those instructions yourself. [`contrib/agents/`](contrib/agents/) ships ready-made instruction files for the major tools — drop the right one into your project and you're done:
+You don't have to write those instructions yourself. Scaffolding a project writes them into the project root, under every name the major tools look for — no assistant is assumed:
 
-| Tool | File | Goes in |
-| :--- | :--- | :--- |
-| Codex, Cursor, Gemini CLI, Zed, and anything else on the [agents.md](https://agents.md) standard | `AGENTS.md` | project root |
-| Claude Code (knows about memd's hooks) | `CLAUDE.md` | project root |
-| Gemini / antigravity-cli | `GEMINI.md` | project root |
-| GitHub Copilot | `copilot-instructions.md` | `.github/` |
-| Cursor (rules format) | `memd.mdc` | `.cursor/rules/` |
+| File | Read by |
+| :--- | :--- |
+| `AGENTS.md` | Codex, Cursor, Zed, Gemini CLI, and anything else on the [agents.md](https://agents.md) standard |
+| `CLAUDE.md` | Claude Code |
+| `GEMINI.md` | Gemini CLI / antigravity-cli |
 
-Already have a `CLAUDE.md` or `AGENTS.md`? Append the memd section instead of overwriting — the files are written to compose. Details in [`contrib/agents/README.md`](contrib/agents/README.md).
+**Your own files are never overwritten.** If a `CLAUDE.md` (or either of the others) already exists, memd leaves it exactly as it is and writes only the missing ones — so add the memd section to it yourself, or copy one of the generated files as a starting point. Delete whichever files correspond to tools you don't use.
+
+For two more conventions memd does not write automatically — GitHub Copilot's `.github/copilot-instructions.md` and Cursor's `.cursor/rules/memd.mdc` — plus longer, richer versions of all of the above, see [`contrib/agents/`](contrib/agents/).
 
 ### What's agent-agnostic (and what isn't yet)
 
@@ -234,10 +234,10 @@ Session transcripts have a bad habit of containing API keys. Before anything rea
 Worth reading before you install.
 
 > [!IMPORTANT]
-> **The PyPI 0.3.0 release predates several fixes on `main`.** Most significantly, in 0.3.0 only `memd init` gave `.memory/` its own git repo — projects picked up *automatically* (by the session-start hook or the sweep) had their memory committed into the project's own git history, which you might then push somewhere public. That is fixed on `main` along with silent distill failures and a broken systemd unit path. Until the next release, install from git (`pip install git+https://github.com/lowcache/memd`), or on 0.3.0 run `memd init` in each project yourself and set `"auto_scaffold": false`.
+> **If you are on PyPI 0.3.0, upgrade.** In 0.3.0 only `memd init` gave `.memory/` its own git repo — projects picked up *automatically* (by the session-start hook or the sweep) had their memory committed into the project's own git history, which you might then push somewhere public. Fixed in 0.3.1.
 
 1.  **Auto-discovery is opt-out, not opt-in.** With the default config, any git repo you open your agent in gets `.memory/` scaffolded and registered. Use `memd exclude <path>` for specific repos, or `"auto_scaffold": false` to disable discovery entirely.
-2.  **Scaffolding also drops a `.model/CLAUDE.md` stub** (starter agent instructions) into each project. It is not auto-gitignored — commit it or ignore it, your call.
+2.  **Scaffolding writes instruction files into your project root** — `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md`, holding the memd memory contract. Existing files of those names are never overwritten, so your own instructions are safe; but on a fresh project you will find three new files. Delete the ones for tools you don't use.
 3.  **`memd install-hooks` writes the bare command `memd`** into `~/.claude/settings.json`. If memd lives in a venv that isn't on claude-code's `PATH`, edit the hook commands to the venv's absolute `bin/memd` path.
 4.  **Distill failures are quiet by design.** `memd sync` exits `3` and points at the log; the detail lives in `$XDG_STATE_HOME/memd/memd.log` (default `~/.local/state/memd/memd.log`). Nothing is lost when a distill fails — the backlog is preserved and replays on the next successful run.
 5.  **Small local curator models are unreliable.** They can fail to hold the JSON contract; memd retries with backoff and preserves the backlog, but distills get slow. See [contrib/curators/README.md](contrib/curators/README.md) for measured guidance.
@@ -339,7 +339,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-170 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, and curation quality. Verified on Python 3.10 through 3.14.
+173 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, and curation quality. Verified on Python 3.10 through 3.14.
 
 To run tests in a Nix-isolated environment:
 ```bash

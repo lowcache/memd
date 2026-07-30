@@ -77,7 +77,7 @@ def ensure_global(cfg):
     gr = os.path.realpath(gr)
     if cfg["projects"].get(gr, {}).get("global"):
         return gr
-    scaffold(gr, name="global", model_stub=False)
+    scaffold(gr, name="global", agent_files=False)
     mem = os.path.join(gr, ".memory")
     write_global_index(cfg)  # generate the project map into the seed commit
     # Give the global store its own git history. Gate on .memory/.git directly

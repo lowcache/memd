@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-30
+
 ### Added
 
 - contrib/curators/ with the curator backend contract and wrapper scripts for
@@ -16,6 +18,18 @@ and this project adheres to
 - GitHub Actions CI: pytest on Python 3.10 through 3.14, build plus twine
   check, shellcheck on the contrib wrappers, and nix flake check
 - Python 3.14 declared supported; the suite passes on it
+
+### Changed
+
+- Scaffolding writes agent instruction files to the project root as AGENTS.md,
+  CLAUDE.md, and GEMINI.md, replacing the single Claude-specific stub that went
+  into a .model/ directory. An existing file of any of those names is never
+  overwritten. A scaffolded project no longer presumes a particular assistant
+- Automatic discovery records the .memory/ ignore rule in the clone-local
+  .git/info/exclude instead of the tracked .gitignore, so memd does not modify
+  a tracked file in a repo the user never asked it to touch. An explicit
+  `memd init` still writes .gitignore, where the rule is shared with
+  collaborators
 
 ### Fixed
 

@@ -56,8 +56,8 @@ def _run_hook(cfg, event, payload):
             top = git_toplevel(cwd)
             gr = cfg.get("global_root")
             # Don't auto-scaffold the global root as a normal project (would
-            # write a .model/ stub into $HOME and shadow the global entry) — this
-            # matters only if $HOME is ever itself a git repo.
+            # write instruction files into $HOME and shadow the global entry)
+            # — this matters only if $HOME is ever itself a git repo.
             if (top and cfg["auto_scaffold"] and top not in cfg["exclude"]
                     and (not gr or top != os.path.realpath(gr))):
                 # provision_project(), not bare scaffold(): an auto-discovered

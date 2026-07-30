@@ -139,14 +139,55 @@ def test_auto_scaffold_does_not_commit_into_parent_repo(memd, env, tmp_path):
 
     mem = proj / ".memory"
     assert (mem / ".git").is_dir(), ".memory did not get its own repo"
-    assert ".memory/" in (proj / ".gitignore").read_text()
     tracked = subprocess.run(["git", "-C", str(proj), "ls-files", "--", ".memory"],
                              capture_output=True, text=True).stdout
     assert tracked.strip() == ""
+    # Auto-discovery must ignore .memory WITHOUT touching a tracked file: the
+    # rule goes in the clone-local .git/info/exclude, and .gitignore is left
+    # exactly as the user had it (here: absent).
+    assert ".memory/" in (proj / ".git" / "info" / "exclude").read_text()
+    assert not (proj / ".gitignore").exists()
     # and the memory itself is versioned in its own store
     r = subprocess.run(["git", "-C", str(mem), "log", "--format=%s"],
                        capture_output=True, text=True)
     assert "memd: distill" in r.stdout
+
+
+def test_agent_files_land_in_project_root(memd, tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    memd.scaffold(str(proj), "proj")
+    for fname in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"):
+        assert (proj / fname).exists(), f"{fname} not written to project root"
+        assert ".memory/inbox/" in (proj / fname).read_text()
+    assert not (proj / ".model").exists(), ".model/ is not memd's to create"
+
+
+def test_scaffold_never_overwrites_existing_agent_files(memd, tmp_path):
+    """CLAUDE.md and friends are commonly long, hand-written files. Scaffolding
+    must add the memd contract only where there is nothing to destroy."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    mine = "# My own instructions\n\nDo not clobber me.\n"
+    (proj / "CLAUDE.md").write_text(mine)
+
+    created = memd.scaffold(str(proj), "proj")
+
+    assert (proj / "CLAUDE.md").read_text() == mine
+    assert str(proj / "CLAUDE.md") not in created
+    # the other conventions still get written
+    assert (proj / "AGENTS.md").exists()
+    assert (proj / "GEMINI.md").exists()
+
+
+def test_global_root_gets_no_agent_files(memd, tmp_path):
+    """The global root is a memory store, not a project anyone works in."""
+    ghome = tmp_path / "ghome"
+    ghome.mkdir()
+    memd.scaffold(str(ghome), "global", agent_files=False)
+    assert (ghome / ".memory" / "state.md").exists()
+    for fname in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"):
+        assert not (ghome / fname).exists()
 
 
 def test_worktree_preserves_unsaved_memory(memd, env, tmp_path, monkeypatch):

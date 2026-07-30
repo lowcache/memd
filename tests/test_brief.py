@@ -163,7 +163,7 @@ def test_superset_of_pre_budget_brief(memd, env, project, cfg):
         "last_sync": "2026-07-10 12:00", "trigger": "manual",
         "summary": "did things"}})
     ghome = str(env.tmp / "ghome")
-    memd.scaffold(ghome, "global", model_stub=False)
+    memd.scaffold(ghome, "global", agent_files=False)
     write_mem(memd, ghome, "todo.md", "# Open Tasks\n\n- [ ] global task")
     cfg["global_root"] = ghome
     gmem = os.path.join(ghome, ".memory")
