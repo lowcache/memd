@@ -47,12 +47,26 @@ def cmd_status(cfg):
         ag = sum(1 for s in srcs if s.endswith(".db"))
         inbox = len(collect_inbox(path)[1])
         print(f"{entry['name']}  ({path})")
-        print(f"  last distill : {m.get('last_sync', 'never')}"
-              + (f"  [{m.get('trigger')}/{m.get('model')}]" if m else ""))
+        # A meta entry can exist carrying only ingest-health keys, so gate the
+        # trigger/model suffix on those keys rather than on the entry existing.
+        detail = (f"  [{m['trigger']}/{m['model']}]"
+                  if m.get("trigger") and m.get("model") else "")
+        print(f"  last distill : {m.get('last_sync', 'never')}{detail}")
         if m.get("summary"):
             print(f"  summary      : {m['summary']}")
         print(f"  sources      : {len(srcs)} ({ag} antigravity), "
               f"{len(pending)} with pending content, {inbox} inbox note(s)")
+        stalled = m.get("ingest_stalled_bytes")
+        if stalled:
+            since = m.get("ingest_stalled_since", "?")
+            print(f"  ! ingestion  : {stalled} bytes read since {since}, "
+                  f"nothing usable extracted.")
+            print("                 memd may not recognise this tool's transcript "
+                  "format any more. Nothing")
+            print("                 is lost — the backlog replays once parsing "
+                  "works. Please report it,")
+            print("                 with your CLI's version: "
+                  "https://github.com/lowcache/memd/issues")
 
 
 def cmd_note(cfg, args):

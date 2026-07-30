@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/lowcache/memd/main/assets/memd.png" alt="memd logo" />
 </p>
 
-[![Release](https://img.shields.io/badge/version-0.3.2-blue.svg)](https://github.com/lowcache/memd)
+[![Release](https://img.shields.io/badge/version-0.3.3-blue.svg)](https://github.com/lowcache/memd)
 [![Python Version Compatibility](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-brightgreen.svg)](#installation)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Nix Flake](https://img.shields.io/badge/Nix-Flake-blueviolet.svg)](#nix-installation)
@@ -166,6 +166,16 @@ curator      : claude (headless)  [models: haiku/sonnet]  — sends session cont
 **What it costs.** A distill runs when a session ends, and the sweep timer checks every 30 minutes for projects with new content. Most sweeps do nothing — a project is skipped unless it has unread transcript content or an inbox note, and transcripts touched in the last `quiet_seconds` (10 minutes) are left alone so an active session isn't digested mid-flight. When a distill does run it's one call, on `model_small` (haiku) unless the digest exceeds `escalate_chars` (15,000), which promotes it to `model_large` (sonnet). To spend less: raise `quiet_seconds`, lengthen the timer interval, or set both models to something cheap. To spend nothing, use a local backend.
 
 **What memd never does.** No network calls of its own, no telemetry, no phone-home. It reads session transcripts, inbox notes, and any `extra_sources` you configure — not your source code. It never executes anything from a transcript or from curator output. See [SECURITY.md](SECURITY.md).
+
+**When ingestion breaks, it says so.** memd reads formats that belong to other tools — `claude-code`'s session logs, `antigravity-cli`'s databases — and those can change without notice. Parsing is deliberately forgiving, so a change doesn't crash anything; the risk is the opposite one, that memd keeps running and quietly stops learning. So it watches for exactly that: session content read, nothing usable extracted. `memd status` reports it instead of leaving you to notice months later that memory went stale.
+
+```
+! ingestion  : 9720 bytes read since 2026-07-30T06:11:27, nothing usable extracted.
+               memd may not recognise this tool's transcript format any more. Nothing
+               is lost — the backlog replays once parsing works.
+```
+
+Nothing is lost when this happens: read cursors only advance after a successful distill, so the unread content simply replays once parsing works again.
 
 ### 4. Extra Custom Sources
 Additional text transcript sources (e.g. custom JSONL logs) can be registered per-project under the `projects.<path>.extra_sources` array in `config.json`.
@@ -358,7 +368,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-175 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, and curation quality. Verified on Python 3.10 through 3.14.
+180 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, silent-ingestion-breakage detection, and curation quality. Verified on Python 3.10 through 3.14.
 
 To run tests in a Nix-isolated environment:
 ```bash

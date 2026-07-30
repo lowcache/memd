@@ -8,6 +8,18 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-07-30
+
+### Added
+
+- `memd status` reports stalled ingestion: session content read from which
+  nothing usable was extracted, with the volume and how long it has been the
+  case. memd parses transcript formats owned by other tools, and parsing is
+  forgiving by design, so a format change does not raise — it just stops memd
+  learning while it still looks healthy. That condition is now visible instead
+  of silent. Read cursors still only advance after a successful distill, so the
+  backlog replays once parsing works
+
 ## [0.3.2] - 2026-07-30
 
 ### Added

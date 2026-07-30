@@ -84,6 +84,31 @@ def transcript_files(cfg, project_path):
     return sorted(set(files))
 
 
+# Unread bytes that yielded no usable content before ingestion is called
+# suspect. Well above a stray truncated line, well below a real session.
+INGEST_STALL_BYTES = 4096
+
+
+def record_ingest_health(project_path, stalled_bytes):
+    """Track sources that carry unread content which yields nothing.
+
+    memd reads other tools' private transcript formats. If one of them changes,
+    parsing does not fail loudly — it just stops recognising entries, and since
+    cursors only advance after a successful apply, the bytes pile up unread
+    while memd looks healthy and quietly remembers nothing. Recording the
+    condition here is what lets `memd status` say so out loud."""
+    def _mutate(m):
+        entry = m.setdefault(project_path, {})
+        if stalled_bytes >= INGEST_STALL_BYTES:
+            entry["ingest_stalled_bytes"] = stalled_bytes
+            entry.setdefault("ingest_stalled_since",
+                             dt.datetime.now().isoformat(timespec="seconds"))
+        else:
+            entry.pop("ingest_stalled_bytes", None)
+            entry.pop("ingest_stalled_since", None)
+    update_json(META_PATH, _mutate)
+
+
 def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=False):
     """Distill new session content into a project's memory.
 
@@ -115,9 +140,16 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
             new_cursors[src] = new_off
         inbox_notes, inbox_paths = collect_inbox(project_path)
 
+        # Bytes we read past the cursor this pass. Non-zero with no digest means
+        # the sources hold content memd could not recognise.
+        scanned = sum(off - cursors.get(src, 0) for src, off in new_cursors.items())
+
         if not digests and not inbox_notes:
-            log(f"sync {project_path}: nothing new ({trigger})")
+            record_ingest_health(project_path, scanned if not digests else 0)
+            log(f"sync {project_path}: nothing new ({trigger})"
+                + (f" [{scanned} unread bytes yielded nothing]" if scanned else ""))
             return None
+        record_ingest_health(project_path, 0)
 
         digest = redact(cap_digest(
             collapse_repeats("\n\n--- next session span ---\n\n".join(digests)),
