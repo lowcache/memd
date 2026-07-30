@@ -2,18 +2,15 @@
 
 import argparse
 import os
-import shutil
 import sys
 
 from memd import __doc__, __version__
-from memd.config import (CURSORS_PATH, META_PATH, git_toplevel, load_config,
-                         load_json, save_config, update_json)
+from memd.config import (CURSORS_PATH, LOG_PATH, META_PATH, git_toplevel,
+                         load_config, load_json, save_config, update_json)
 from memd.digest import baseline_cursor
 from memd.hooks import cmd_hook, cmd_install_hooks
 from memd.inbox import collect_inbox, write_inbox_note
-from memd.memory import (find_project, make_brief, register, scaffold,
-                         init_memory_repo, main_worktree_root, migrate_parent_untrack,
-                         memory_checkout_clean)
+from memd.memory import find_project, make_brief, provision_project
 from memd.sweep import cmd_sweep, ensure_global
 from memd.sync import source_pending, sync_project, transcript_files
 
@@ -122,37 +119,7 @@ def main():
         sys.exit(2)  # config error
     elif args.cmd == "init":
         path = os.path.realpath(args.path)
-        mem = os.path.join(path, ".memory")
-        mem_pre = os.path.exists(mem)  # real .memory here before we scaffold?
-        # A pre-existing .memory is safe to relink only if it is a clean, tracked
-        # checkout (content already in git); check before scaffold dirties it.
-        mem_pre_clean = mem_pre and memory_checkout_clean(path)
-        created = scaffold(path, args.name)
-
-        if cfg.get("memory_own_repo") and cfg.get("git_commit"):
-            migrate_parent_untrack(path)
-            main_root = main_worktree_root(path)
-            if main_root != path:
-                # Linked worktree: share the main worktree's single store via a
-                # symlink so worktrees can't diverge — but never destroy unsaved
-                # memory (memd must not lose memory).
-                main_mem = os.path.join(main_root, ".memory")
-                created.extend(scaffold(main_root, name=args.name))
-                init_memory_repo(main_mem, "memd: seed project memory root")
-                if os.path.islink(mem):
-                    pass  # already linked (idempotent)
-                elif (not mem_pre) or mem_pre_clean:
-                    # Only the templates we just scaffolded, or a clean checkout
-                    # whose content already lives in git and the shared store.
-                    shutil.rmtree(mem)
-                    os.symlink(main_mem, mem)
-                else:
-                    print(f"warning: {mem} holds unsaved memory; not replacing it "
-                          f"with a symlink to {main_mem} (resolve manually)", file=sys.stderr)
-            else:
-                init_memory_repo(mem, "memd: seed project memory root")
-
-        register(cfg, path, args.name)
+        created = provision_project(cfg, path, args.name)
         # Baseline: start memory from now. Pre-existing transcripts are
         # presumed covered by existing memory (or not worth back-filling).
         skipped = 0
@@ -170,7 +137,12 @@ def main():
         ok = sync_project(cfg, args.project, trigger=args.trigger,
                           transcript=args.transcript, dry_run=args.dry_run)
         # exit contract: 0 = ok/no-op, 3 = curator/distill failure
-        sys.exit(3 if ok is False else 0)
+        if ok is False:
+            # The reason is in the log; a bare nonzero exit with no output reads
+            # as "did nothing" to a first-time user, so point at it explicitly.
+            print(f"distill failed; see {LOG_PATH} for the reason", file=sys.stderr)
+            sys.exit(3)
+        sys.exit(0)
     elif args.cmd == "sweep":
         # 1 = known error (failed distills)
         sys.exit(1 if cmd_sweep(cfg, jobs=args.jobs) else 0)

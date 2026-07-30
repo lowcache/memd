@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # memd shells out to git; the tests build real repos, and commits need an
+      # identity that the runner does not configure by default.
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "memd ci"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install .
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+  package:
+    name: build + twine check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and check distributions
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+
+  shellcheck:
+    name: shellcheck contrib scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint POSIX shell wrappers
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck --shell=sh contrib/curators/*.sh
+
+  flake:
+    name: nix flake check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: "experimental-features = nix-command flakes"
+      - run: nix flake check --all-systems

@@ -102,6 +102,53 @@ def test_cli_init_integration(memd, env, tmp_path, monkeypatch):
     assert wt_mem.is_symlink()
     assert os.path.realpath(str(wt_mem)) == os.path.realpath(str(mem))
 
+def test_auto_scaffold_does_not_commit_into_parent_repo(memd, env, tmp_path):
+    """Regression: auto-discovery (session-start hook, sweep) used to call
+    scaffold()+register() directly, leaving .memory with no repo of its own, so
+    the distill commit landed in the USER'S project history — memory leaking
+    into a repo they may push publicly. Every path must provision the same way
+    memd init does."""
+    import memd.memory
+    cfg = memd.load_config()
+    cfg["memory_own_repo"] = True
+    cfg["git_commit"] = True
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    subprocess.run(["git", "-C", str(proj), "init", "-q"])
+    # HOME is isolated by the env fixture, so this repo has no git identity of
+    # its own; without one the setup commit fails and the assertions below would
+    # pass vacuously against an empty history.
+    subprocess.run(["git", "-C", str(proj), "config", "user.email", "t@t"])
+    subprocess.run(["git", "-C", str(proj), "config", "user.name", "t"])
+    (proj / "code.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(proj), "add", "-A"], capture_output=True)
+    r = subprocess.run(["git", "-C", str(proj), "commit", "-q", "-m", "init"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, f"test setup commit failed: {r.stderr}"
+
+    memd.memory.provision_project(cfg, str(proj))
+    # A distill commit after auto-discovery must not touch the project's repo.
+    (proj / ".memory" / "state.md").write_text("port 9090\n")
+    memd.memory.git_commit_memory(str(proj), "memd: distill")
+
+    subjects = subprocess.run(
+        ["git", "-C", str(proj), "log", "--format=%s"],
+        capture_output=True, text=True).stdout.split()
+    assert subjects == ["init"], f"memd commits leaked into project repo: {subjects}"
+
+    mem = proj / ".memory"
+    assert (mem / ".git").is_dir(), ".memory did not get its own repo"
+    assert ".memory/" in (proj / ".gitignore").read_text()
+    tracked = subprocess.run(["git", "-C", str(proj), "ls-files", "--", ".memory"],
+                             capture_output=True, text=True).stdout
+    assert tracked.strip() == ""
+    # and the memory itself is versioned in its own store
+    r = subprocess.run(["git", "-C", str(mem), "log", "--format=%s"],
+                       capture_output=True, text=True)
+    assert "memd: distill" in r.stdout
+
+
 def test_worktree_preserves_unsaved_memory(memd, env, tmp_path, monkeypatch):
     """A linked worktree whose .memory holds uncommitted content must be
     preserved, never replaced by a symlink — memd must not lose memory."""

@@ -4,6 +4,7 @@ budgets, git audit commits, and the session-start brief."""
 import datetime as dt
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -284,6 +285,55 @@ def memory_checkout_clean(project_path):
         return status.returncode == 0 and status.stdout.strip() == ""
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+def provision_project(cfg, path, name=None):
+    """Scaffold + git-provision + register a project. The ONE entry point for
+    bringing a project under memd management.
+
+    Every caller must route through here — `memd init`, the claude-code
+    session-start hook, and the sweep's auto-detection alike. Scaffolding alone
+    is not enough: without init_memory_repo()/migrate_parent_untrack(), .memory/
+    has no repo of its own, so git_commit_memory() resolves upward and commits
+    the user's project memory into the PROJECT's git history (and from there to
+    whatever remote they push). That is memory leaking into someone else's repo,
+    so the provisioning is part of creation, not a flag on it.
+
+    Returns the list of created paths."""
+    path = os.path.realpath(path)
+    mem = os.path.join(path, ".memory")
+    mem_pre = os.path.exists(mem)  # real .memory here before we scaffold?
+    # A pre-existing .memory is safe to relink only if it is a clean, tracked
+    # checkout (content already in git); check before scaffold dirties it.
+    mem_pre_clean = mem_pre and memory_checkout_clean(path)
+    created = scaffold(path, name)
+
+    if cfg.get("memory_own_repo") and cfg.get("git_commit"):
+        migrate_parent_untrack(path)
+        main_root = main_worktree_root(path)
+        if main_root != path:
+            # Linked worktree: share the main worktree's single store via a
+            # symlink so worktrees can't diverge — but never destroy unsaved
+            # memory (memd must not lose memory).
+            main_mem = os.path.join(main_root, ".memory")
+            created.extend(scaffold(main_root, name=name))
+            init_memory_repo(main_mem, "memd: seed project memory root")
+            if os.path.islink(mem):
+                pass  # already linked (idempotent)
+            elif (not mem_pre) or mem_pre_clean:
+                # Only the templates we just scaffolded, or a clean checkout
+                # whose content already lives in git and the shared store.
+                shutil.rmtree(mem)
+                os.symlink(main_mem, mem)
+            else:
+                print(f"warning: {mem} holds unsaved memory; not replacing it "
+                      f"with a symlink to {main_mem} (resolve manually)",
+                      file=sys.stderr)
+        else:
+            init_memory_repo(mem, "memd: seed project memory root")
+
+    register(cfg, path, name)
+    return created
 
 
 def main_worktree_root(path):

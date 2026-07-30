@@ -67,6 +67,33 @@ def test_no_json_raises(memd, cfg_for, no_retry_delay):
                           "prompt", "haiku")
 
 
+def test_raw_newline_in_string_is_accepted(memd, cfg_for):
+    # Local models routinely emit a literal newline inside a JSON string rather
+    # than \n. strict=False accepts it; rejecting would make them unusable.
+    body = "## S\n\nport 9090."
+    stdout = ('{"summary": "moved", "state_body": "' + body + '",'
+              ' "decisions_body": null, "todo_body": null,'
+              ' "mistakes_new_entries": [], "archive_entries": []}')
+    assert memd.call_curator(cfg_for(stdout), "prompt", "haiku")["state_body"] == body
+
+
+def test_malformed_json_raises_curator_error(memd, cfg_for, no_retry_delay):
+    # Regression: a local model (ollama/llama3.1) emitted a bad \escape inside a
+    # string. raw_decode's JSONDecodeError used to escape uncaught and crash
+    # memd with a traceback; it must surface as a retryable CuratorError.
+    bad = '{"summary": "moved", "state_body": "port 9090 \\p not an escape"}'
+    with pytest.raises(memd.CuratorError, match="not valid JSON"):
+        memd.call_curator(cfg_for(bad), "prompt", "haiku")
+
+
+def test_truncated_json_raises_curator_error(memd, cfg_for, no_retry_delay):
+    # Output cut off mid-object (context limit reached) is the other common
+    # weak-model failure; same contract.
+    with pytest.raises(memd.CuratorError, match="not valid JSON"):
+        memd.call_curator(cfg_for('{"summary": "abc", "state_body": '),
+                          "prompt", "haiku")
+
+
 def test_missing_binary_raises(memd):
     # no no_retry_delay fixture on purpose: a ConfigError must fail fast
     # without retry sleeps, or this test hangs for the full backoff

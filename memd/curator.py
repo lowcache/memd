@@ -189,7 +189,20 @@ def _call_curator_once(cfg, prompt, model):
     start = text.find("{")
     if start < 0:
         raise CuratorError(f"no JSON in curator output: {text[:300]}")
-    obj, _ = json.JSONDecoder().raw_decode(text[start:])
+    try:
+        # strict=False permits raw control characters (most often an unescaped
+        # newline) inside strings. Weaker/local curator models emit those
+        # constantly, and memd is already lenient about fences and surrounding
+        # prose; rejecting an otherwise well-formed object over a literal
+        # newline would make small backends unusable for no benefit.
+        obj, _ = json.JSONDecoder(strict=False).raw_decode(text[start:])
+    except ValueError as e:
+        # Smaller/local models routinely emit near-JSON (bad \escapes, trailing
+        # commas). That is a bad response, not a bug in memd: raise the
+        # retryable error so the backoff gets another sample, rather than
+        # letting JSONDecodeError escape as an unhandled traceback.
+        raise CuratorError(f"curator output is not valid JSON ({e}): "
+                           f"{text[start:start + 300]}")
     return obj
 
 

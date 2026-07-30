@@ -13,7 +13,7 @@ from memd.config import (CLAUDE_PROJECTS_DIR, CURSORS_PATH, HOME, META_PATH,
                          save_config)
 from memd.inbox import collect_inbox
 from memd.memory import (enforce_budget_mistakes, find_project,
-                         git_commit_memory, register, scaffold,
+                         git_commit_memory, provision_project, scaffold,
                          init_memory_repo)
 from memd.sync import source_pending, sync_project, transcript_files
 
@@ -159,8 +159,10 @@ def cmd_sweep(cfg, jobs=None):
     ensure_global(cfg)
     if cfg["auto_scaffold"]:
         for path in detect_new_projects(cfg):
-            scaffold(path)
-            register(cfg, path)
+            # provision_project(), not bare scaffold(): see hooks.py — an
+            # auto-detected project needs its own .memory repo, otherwise its
+            # memory lands in the user's project history.
+            provision_project(cfg, path)
             log(f"sweep: auto-scaffolded + registered {path}")
     cursors = load_json(CURSORS_PATH, {})
     quiet = cfg["quiet_seconds"]

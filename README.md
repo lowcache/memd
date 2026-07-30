@@ -1,7 +1,7 @@
 # memd — Agent-Driven Project Memory Curator
 
 <p align="center">
-  <img src="assets/memd.png" alt="memd logo" />
+  <img src="https://raw.githubusercontent.com/lowcache/memd/main/assets/memd.png" alt="memd logo" />
 </p>
 
 [![Release](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/lowcache/memd)
@@ -91,6 +91,14 @@ You don't have to write those instructions yourself. [`contrib/agents/`](contrib
 | Cursor (rules format) | `memd.mdc` | `.cursor/rules/` |
 
 Already have a `CLAUDE.md` or `AGENTS.md`? Append the memd section instead of overwriting — the files are written to compose. Details in [`contrib/agents/README.md`](contrib/agents/README.md).
+
+### What's agent-agnostic (and what isn't yet)
+
+The core of memd doesn't care which agent or model you use: the memory files are plain markdown, the inbox accepts notes from anything that can write a file, `memd brief` prints to stdout for any tool to consume, and the `curator_cmd` config key lets any LLM command do the distilling. The parts that are currently tool-specific:
+
+*   **Automatic transcript ingestion** understands `claude-code` session logs and `antigravity-cli` databases. Other agents' transcripts can be wired in per-project via `extra_sources` (plain text / JSONL), or their facts routed through the inbox — there is no built-in parser for them yet.
+*   **Lifecycle hooks** (`memd install-hooks`, session-start brief injection) exist only for `claude-code`. Every other tool relies on the periodic sweep timer instead: slower cadence, same result.
+*   **The default curator is the `claude` CLI**, and the default `model_small`/`model_large` names (`haiku`/`sonnet`) assume it. Set `curator_cmd` to distill with a local model, another vendor's CLI, or anything else — [`contrib/curators/`](contrib/curators/) has ready-made wrappers and the backend contract, so you can run memd with no Anthropic dependency at all.
 
 ---
 
@@ -221,11 +229,34 @@ Session transcripts have a bad habit of containing API keys. Before anything rea
 
 ---
 
+## Known Caveats
+
+Worth reading before you install.
+
+> [!IMPORTANT]
+> **The PyPI 0.3.0 release predates several fixes on `main`.** Most significantly, in 0.3.0 only `memd init` gave `.memory/` its own git repo — projects picked up *automatically* (by the session-start hook or the sweep) had their memory committed into the project's own git history, which you might then push somewhere public. That is fixed on `main` along with silent distill failures and a broken systemd unit path. Until the next release, install from git (`pip install git+https://github.com/lowcache/memd`), or on 0.3.0 run `memd init` in each project yourself and set `"auto_scaffold": false`.
+
+1.  **Auto-discovery is opt-out, not opt-in.** With the default config, any git repo you open your agent in gets `.memory/` scaffolded and registered. Use `memd exclude <path>` for specific repos, or `"auto_scaffold": false` to disable discovery entirely.
+2.  **Scaffolding also drops a `.model/CLAUDE.md` stub** (starter agent instructions) into each project. It is not auto-gitignored — commit it or ignore it, your call.
+3.  **`memd install-hooks` writes the bare command `memd`** into `~/.claude/settings.json`. If memd lives in a venv that isn't on claude-code's `PATH`, edit the hook commands to the venv's absolute `bin/memd` path.
+4.  **Distill failures are quiet by design.** `memd sync` exits `3` and points at the log; the detail lives in `$XDG_STATE_HOME/memd/memd.log` (default `~/.local/state/memd/memd.log`). Nothing is lost when a distill fails — the backlog is preserved and replays on the next successful run.
+5.  **Small local curator models are unreliable.** They can fail to hold the JSON contract; memd retries with backoff and preserves the backlog, but distills get slow. See [contrib/curators/README.md](contrib/curators/README.md) for measured guidance.
+6.  **Linux is the tested platform.** memd is POSIX-only (`flock`-based locking); macOS is untested, Windows is not supported.
+
+---
+
 ## Installation
 
-### pip Installation
+### Requirements
 
-Requires Python **3.10+**. `memd` has zero runtime dependencies (standard library only).
+*   **Linux**, Python **3.10+** (standard library only, zero runtime dependencies), and `git` on `PATH`.
+*   **A curator backend** — the piece that actually runs the distillation LLM. One of:
+    *   the [`claude` CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (the default; see the `claude_bin` config key), **or**
+    *   any command you configure via `curator_cmd`: it receives the prompt on stdin and must print one JSON object (fences/prose tolerated). This is how you run memd against a local Ollama model, another vendor's CLI, or anything else — see [contrib/curators/](contrib/curators/) for working wrappers and the full contract.
+
+Without a working backend, everything except distillation still works — `init`, `brief`, `note`, `status` — and `memd sync` exits `3` while preserving the backlog, which replays automatically once a backend is available.
+
+### pip Installation
 
 ```bash
 # From PyPI
@@ -308,7 +339,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-166 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, brief budgeting, memory-repo decoupling + worktree sharing, and curation quality. Verified on Python 3.10 through 3.13.
+169 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, and curation quality. Verified on Python 3.10 through 3.13.
 
 To run tests in a Nix-isolated environment:
 ```bash

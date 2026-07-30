@@ -34,15 +34,18 @@ systemctl --user list-timers --all | grep memd-sweep
 
 ## Customization
 
-### Local/User Bin PATH Override
-Since systemd user manager services run in an environment that may not inherit your interactive shell's `PATH` (such as `~/.local/bin`), `ExecStart=memd sweep` might fail if `memd` is installed via `pip install --user`.
+### Executable Path
+The systemd user manager does not inherit your interactive shell's `PATH`, and its fixed search path excludes `~/.local/bin` — where `pip install --user` and `pipx` put console scripts. The shipped unit therefore uses an explicit path:
 
-To specify the absolute path without hardcoding a username, edit `~/.config/systemd/user/memd-sweep.service` or use a drop-in override (`systemctl --user edit memd-sweep.service`) to set:
 ```systemd
-[Service]
 ExecStart=%h/.local/bin/memd sweep
 ```
-(`%h` is a systemd specifier resolved to your home directory at runtime).
+
+(`%h` is a systemd specifier resolved to your home directory at runtime, so no username is hardcoded.)
+
+If memd is instead on the system path — a Nix profile install, a distro package, or `/usr/local/bin` — change it to plain `ExecStart=memd sweep`. Confirm which applies with `command -v memd`. If memd lives in a virtualenv, use that venv's absolute `bin/memd`.
+
+Edit the unit directly or use a drop-in override (`systemctl --user edit memd-sweep.service`), then `systemctl --user daemon-reload`.
 
 ### Changing Sweep Frequency
 To change how often the sweep runs, edit the `[Timer]` section of `~/.config/systemd/user/memd-sweep.timer` (e.g. changing `OnUnitActiveSec` or `RandomizedDelaySec`), then run:

@@ -3,5 +3,9 @@ Description=memd inbox sweep
 
 [Service]
 Type=oneshot
-ExecStart=memd sweep
+# systemd's executable search path does NOT include ~/.local/bin, where pip
+# --user and pipx install console scripts. %h is the user's home at runtime.
+# If memd is on the system path instead (Nix, distro package, /usr/local),
+# replace this with: ExecStart=memd sweep
+ExecStart=%h/.local/bin/memd sweep
 Nice=10

@@ -58,6 +58,7 @@ from memd.memory import (
     git_commit_memory,
     global_slice,
     make_brief,
+    provision_project,
     read_memory,
     register,
     render_frontmatter,

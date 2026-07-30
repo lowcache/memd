@@ -8,7 +8,7 @@ import sys
 
 from memd.config import (CLAUDE_SETTINGS, LOG_PATH, STATE_DIR, git_toplevel,
                          load_json, log, save_json)
-from memd.memory import find_project, make_brief, register, scaffold
+from memd.memory import find_project, make_brief, provision_project
 from memd.sweep import ensure_global
 
 # --------------------------------------------------------------------------
@@ -60,8 +60,10 @@ def _run_hook(cfg, event, payload):
             # matters only if $HOME is ever itself a git repo.
             if (top and cfg["auto_scaffold"] and top not in cfg["exclude"]
                     and (not gr or top != os.path.realpath(gr))):
-                scaffold(top)
-                register(cfg, top)
+                # provision_project(), not bare scaffold(): an auto-discovered
+                # project must get its own .memory repo too, or its memory gets
+                # committed into the user's project history.
+                provision_project(cfg, top)
                 root = top
                 log(f"auto-scaffolded memory for {top}")
         if root is None:
