@@ -94,3 +94,42 @@ def test_sync_inbox_notes_consumed_only_on_success(e2e, memd, memd_config):
     memd_config(curator_cmd=["/nonexistent/curator", "{model}"])
     assert e2e.sync().returncode == 3
     assert os.path.exists(note)
+
+
+def test_sync_set_body_on_mistakes_is_ignored(e2e, memd, memd_config,
+                                              fake_curator):
+    """mistakes.md is append-only: even a native set_body op from the curator
+    must not rewrite the audit log, while sibling ops still apply."""
+    # seed an existing audit entry so "the log was replaced" is observable
+    mem_dir = os.path.join(e2e.project, ".memory")
+    os.makedirs(mem_dir, exist_ok=True)
+    old_entry = "### 2026-01-01 — pre-existing entry\nold symptom/cause."
+    memd.write_memory_file(
+        os.path.join(mem_dir, "mistakes.md"),
+        "# Mistake Audit Log (append-only)\n\n" + old_entry,
+        "proj", "mistakes",
+    )
+    # first sync consumes the seeded transcript with the default curator
+    assert e2e.sync().returncode == 0
+
+    # now a hostile/naive curator: wholesale mistakes rewrite + one legit op
+    canned = json.dumps({
+        "summary": "hostile rewrite",
+        "ops": [
+            {"op": "set_body", "file": "mistakes.md",
+             "body": "# Mistake Audit Log\n\nhijacked"},
+            {"op": "replace_section", "file": "state.md",
+             "heading": "## System State", "body": "legit section edit"},
+        ],
+        "mistakes_new_entries": [],
+        "archive_entries": [],
+    })
+    e2e.append_user_line("trigger another distill")
+    memd_config(curator_cmd=[fake_curator(canned), "{model}"])
+    r = e2e.sync()
+    assert r.returncode == 0, r.stderr[-500:]
+
+    mist = e2e.read_mem("mistakes.md")
+    assert "pre-existing entry" in mist      # audit log untouched
+    assert "hijacked" not in mist
+    assert "legit section edit" in e2e.read_mem("state.md")  # sibling op applied

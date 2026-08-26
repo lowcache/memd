@@ -23,15 +23,34 @@ def test_write_inbox_note_returns_published_path(memd, env):
     p = memd.write_inbox_note(root, "hello note")
     assert os.path.isfile(p)
     assert os.path.dirname(p) == os.path.join(root, ".memory", "inbox")
-    assert open(p).read() == "hello note\n"
+    content = open(p).read()
+    assert content.startswith(f"---\ndate: {memd.today()}\n"
+                              "source: unattributed\n---\n\n")
+    assert content.endswith("hello note\n")
+    assert "<!-- source" not in content
 
 
-def test_write_inbox_note_source_header(memd, env):
+def test_write_inbox_note_frontmatter_carries_source(memd, env):
     root = make_root(env)
     p = memd.write_inbox_note(root, "body text", source="unit-test")
     content = open(p).read()
-    assert content.startswith("<!-- source: unit-test -->\n")
+    assert content.startswith(f"---\ndate: {memd.today()}\n"
+                              "source: unit-test\n---\n\n")
     assert "body text" in content
+    # no double-provenance: the legacy HTML comment stays out
+    assert "<!-- source" not in content
+
+
+def test_write_inbox_note_preserves_writer_frontmatter(memd, env):
+    root = make_root(env)
+    p = memd.write_inbox_note(
+        root, "---\ndate: 2001-01-01\nsource: mine\ntopic: x\n---\n\nown body",
+        source="should-be-ignored")
+    content = open(p).read()
+    assert content == "---\ndate: 2001-01-01\nsource: mine\ntopic: x\n" \
+                      "---\n\nown body\n"
+    assert "unattributed" not in content
+    assert "<!-- source" not in content
 
 
 def test_write_inbox_note_unique_names_many_calls(memd, env):
@@ -59,6 +78,43 @@ def test_collect_inbox_truncates_long_notes(memd, env):
     assert len(notes) == 1
     assert "truncated at 4000 chars" in notes[0]
     assert len(notes[0]) < 6000
+
+
+def test_collect_inbox_truncation_counts_body_not_frontmatter(memd, env):
+    root = make_root(env)
+    fm = "---\ndate: 2020-01-01\nsource: big\n---\n\n"
+    inbox = os.path.join(root, ".memory", "inbox")
+    # body of exactly 3999 chars must survive whole despite the FM overhead
+    open(os.path.join(inbox, "fits.md"), "w").write(fm + "y" * 3999)
+    open(os.path.join(inbox, "over.md"), "w").write(fm + "z" * 4001)
+    notes, _ = memd.collect_inbox(root)
+    fits = next(n for n in notes if "fits.md" in n)
+    assert "truncated" not in fits
+    assert "y" * 3999 in fits
+    over = next(n for n in notes if "over.md" in n)
+    assert "truncated at 4000 chars" in over
+    assert "z" * 4001 not in over
+
+
+def test_collect_inbox_label_enrichment_and_fallbacks(memd, env):
+    root = make_root(env)
+    memd.write_inbox_note(root, "auto note", source="tool-x")  # date = today
+    inbox = os.path.join(root, ".memory", "inbox")
+    open(os.path.join(inbox, "owned.md"), "w").write(
+        "---\ndate: 1999-12-31\nsource: old-writer\n---\n\nstale fact\n")
+    open(os.path.join(inbox, "bare.txt"), "w").write("no frontmatter here\n")
+    notes, paths = memd.collect_inbox(root)
+    assert len(notes) == 3 and len(paths) == 3
+    auto = next(n for n in notes if "tool-x" in n)
+    assert f"source=tool-x, dated={memd.today()}" in auto
+    assert "auto note" in auto
+    owned = next(n for n in notes if "owned.md" in n)
+    assert "INBOX NOTE (owned.md, source=old-writer, dated=1999-12-31):" \
+        in owned
+    assert "stale fact" in owned
+    bare = next(n for n in notes if "bare.txt" in n)
+    assert "INBOX NOTE (bare.txt, source=unattributed, dated=unknown):" in bare
+    assert "no frontmatter here" in bare
 
 
 def test_collect_inbox_skips_dotfiles_and_foreign_extensions(memd, env):

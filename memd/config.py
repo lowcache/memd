@@ -41,6 +41,9 @@ DEFAULT_CONFIG = {
     "model_large": "sonnet",
     "escalate_chars": 15000,        # digests above this go to model_large
     "digest_cap_chars": 60000,      # max transcript digest fed to the model
+    # subagent (sidechain) turns ride along in digests as indented "  SUB> "
+    # lines — delegated work reaches memory instead of vanishing
+    "capture_sidechains": True,
     "quiet_seconds": 600,           # sweep skips transcripts modified more recently
     "sweep_jobs": 4,                # parallel project syncs per sweep (threads;
                                     # per-project flock still serializes any

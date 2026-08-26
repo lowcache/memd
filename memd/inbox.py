@@ -5,6 +5,25 @@ import datetime as dt
 import os
 import tempfile
 
+def _note_frontmatter(text):
+    """Split optional leading YAML frontmatter off an inbox note:
+    ({key: value}, body), or ({}, text) when absent/unterminated. Kept inline —
+    importing memd.memory here would be circular (it imports collect_inbox)."""
+    lines = text.split("\n")
+    if not lines or lines[0] != "---":
+        return {}, text
+    meta = {}
+    i = 1
+    while i < len(lines) and lines[i] != "---":
+        if ":" in lines[i]:
+            k, _, v = lines[i].partition(":")
+            meta[k.strip()] = v.strip()
+        i += 1
+    if i >= len(lines):  # no closing fence: not frontmatter, read as body
+        return {}, text
+    return meta, "\n".join(lines[i + 1:])
+
+
 def collect_inbox(project_path):
     inbox = os.path.join(project_path, ".memory", "inbox")
     notes, paths = [], []
@@ -17,9 +36,14 @@ def collect_inbox(project_path):
                 data = open(p).read()
             except OSError:
                 continue
+            # provenance moves into the label; the truncation budget covers the
+            # body only, never frontmatter
+            meta, data = _note_frontmatter(data)
+            src = meta.get("source") or "unattributed"
+            date = meta.get("date") or "unknown"
             if len(data) > 4000:
                 data = data[:4000] + "\n[... note truncated at 4000 chars ...]"
-            notes.append(f"INBOX NOTE ({fn}):\n{data}")
+            notes.append(f"INBOX NOTE ({fn}, source={src}, dated={date}):\n{data}")
             paths.append(p)
     return notes, paths
 
@@ -47,8 +71,14 @@ def write_inbox_note(root, text, source=None):
     inbox = os.path.join(mem, "inbox")
     os.makedirs(inbox, exist_ok=True)
     body = text if text.endswith("\n") else text + "\n"
-    if source:
-        body = f"<!-- source: {source} -->\n{body}"
+    if body.split("\n", 1)[0] == "---":
+        pass  # writer-owned frontmatter: provenance is theirs, touch nothing
+    else:
+        # normalize provenance as frontmatter; the legacy <!-- source -->
+        # comment stays out so a note never carries both
+        src = source or "unattributed"
+        body = (f"---\ndate: {dt.date.today().isoformat()}\n"
+                f"source: {src}\n---\n\n" + body)
     stamp = dt.datetime.now().strftime("%Y%m%dT%H%M%S%f")
     # Temp lives in <root>/.memory/ (same filesystem as inbox, so os.link is
     # atomic) but outside inbox/, and is dotfile-prefixed — collect_inbox scans

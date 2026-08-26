@@ -37,6 +37,13 @@ routed: global                 # optional, documents intent
 The durable fact, decision, mistake, or observation.
 ```
 
+Since memd ≥ 0.4 the reader normalizes provenance: `write_inbox_note()`
+prepends minimal `date:`/`source:` frontmatter to notes that lack it (and no
+longer emits its legacy `<!-- source -->` comment), and `collect_inbox()`
+lifts frontmatter into the curator label without counting it against the
+4000-character body budget. Writers SHOULD include frontmatter as shown;
+readers tolerate its absence.
+
 Keep notes under **4000 characters**: the reader truncates longer notes at
 4000 with an explicit `[... note truncated ...]` marker. One fact per note
 beats one omnibus note.

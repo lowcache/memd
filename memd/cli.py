@@ -54,6 +54,14 @@ def cmd_status(cfg):
         print(f"  last distill : {m.get('last_sync', 'never')}{detail}")
         if m.get("summary"):
             print(f"  summary      : {m['summary']}")
+        # rolling journal: recent distill events make gaps visible (a project
+        # with pending sources but only failed outcomes is quietly blind)
+        hist = [h for h in m.get("history", []) if isinstance(h, dict)]
+        for h in hist[-2:]:
+            outcome = h.get("outcome", "?")
+            mark = "!" if outcome == "fail" else " "
+            print(f"  {mark} {h.get('ts', '?')} [{h.get('trigger', '?')}/"
+                  f"{h.get('model', '?')}] {str(h.get('summary', ''))[:90]}")
         print(f"  sources      : {len(srcs)} ({ag} antigravity), "
               f"{len(pending)} with pending content, {inbox} inbox note(s)")
         stalled = m.get("ingest_stalled_bytes")

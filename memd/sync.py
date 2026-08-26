@@ -8,14 +8,43 @@ import os
 import re
 
 from memd.config import (CLAUDE_PROJECTS_DIR, CURSORS_PATH, LOCK_DIR,
-                         META_PATH, load_json, log, update_json)
-from memd.curator import build_prompt, call_curator, dedupe_mistakes, validate
+                         MEMORY_FILES, META_PATH, load_json, log, update_json)
+from memd.curator import (apply_ops, build_prompt, call_curator,
+                          dedupe_mistakes, validate)
 from memd.digest import (ag_max_idx, cap_digest, collapse_repeats, digest_source,
-                         project_ag_dbs, redact)
+                         project_ag_dbs, redact, render_span, sort_spans,
+                         truncate_spans)
 from memd.inbox import collect_inbox
 from memd.memory import (append_archive, enforce_budget_mistakes,
                          git_commit_memory, read_memory, scaffold,
                          write_memory_file)
+
+# Rolling per-project distill history kept in meta.json. The old single-entry
+# meta made the memory system itself amnesiac: a crash-looping backend or a
+# week of failed sweeps left no trace. The journal is also what grounds the
+# curator's PREVIOUS DISTILLS section.
+JOURNAL_CAP = 100
+
+
+def _journal(project_path, trigger, model=None, digest_chars=0, outcome="ok",
+             summary="", extra=None):
+    """Append one distill event to the project's rolling journal (and merge any
+    extra entry fields) under the state lock."""
+    def _mutate(m):
+        e = m.setdefault(project_path, {})
+        if extra:
+            e.update(extra)
+        hist = e.setdefault("history", [])
+        hist.append({
+            "ts": dt.datetime.now().isoformat(timespec="seconds"),
+            "trigger": trigger,
+            "model": model or "",
+            "digest_chars": digest_chars,
+            "outcome": outcome,
+            "summary": (summary or "")[:200],
+        })
+        del hist[:-JOURNAL_CAP]
+    update_json(META_PATH, _mutate)
 
 def project_lock(path):
     os.makedirs(LOCK_DIR, exist_ok=True)
@@ -128,15 +157,15 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
     try:
         cursors = load_json(CURSORS_PATH, {})
         sources = [transcript] if transcript else transcript_files(cfg, project_path)
-        digests, new_cursors = [], {}
+        spans, new_cursors = [], {}
         for src in sources:
             if not src or not os.path.exists(src):
                 continue
             if not source_pending(src, cursors):
                 continue
-            d, new_off = digest_source(src, cursors.get(src, 0))
-            if d.strip():
-                digests.append(d)
+            span, new_off = digest_source(cfg, src, cursors.get(src, 0))
+            if span is not None and span.lines:
+                spans.append(span)
             new_cursors[src] = new_off
         inbox_notes, inbox_paths = collect_inbox(project_path)
 
@@ -144,16 +173,26 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
         # the sources hold content memd could not recognise.
         scanned = sum(off - cursors.get(src, 0) for src, off in new_cursors.items())
 
-        if not digests and not inbox_notes:
-            record_ingest_health(project_path, scanned if not digests else 0)
+        if not spans and not inbox_notes:
+            record_ingest_health(project_path, scanned)
             log(f"sync {project_path}: nothing new ({trigger})"
                 + (f" [{scanned} unread bytes yielded nothing]" if scanned else ""))
             return None
         record_ingest_health(project_path, 0)
 
-        digest = redact(cap_digest(
-            collapse_repeats("\n\n--- next session span ---\n\n".join(digests)),
-            cfg["digest_cap_chars"]))
+        # Chronological assembly: order spans across ALL sources by their own
+        # timestamps (filename order is meaningless), then budget-triage whole
+        # low-signal spans — dropping the middle of the timeline silently was
+        # how cap_digest hid work. Whatever survives is rendered with its
+        # header; dropped spans leave explicit omission markers so the curator
+        # knows something happened even when it can't know what.
+        spans = sort_spans(spans)
+        kept, omitted_labels = truncate_spans(spans, cfg["digest_cap_chars"])
+        joined = "\n\n".join([render_span(s) for s in kept] + omitted_labels)
+        if len(joined) > cfg["digest_cap_chars"]:
+            # one oversize span survived triage: last-resort head/tail elision
+            joined = cap_digest(joined, cfg["digest_cap_chars"])
+        digest = redact(collapse_repeats(joined))
         inbox_notes = [redact(n) for n in inbox_notes]
         # Escalate on size alone, whatever triggered the distill. Restricting
         # this to session-end/manual meant a sweep never escalated — and a sweep
@@ -164,11 +203,20 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
             model = cfg["model_large"]
 
         memory = read_memory(project_path)
-        prompt = build_prompt(cfg, project_path, name, memory, digest, inbox_notes)
+        # What earlier distills already applied, oldest first: evidence for the
+        # charter's do-not-reapply rule instead of leaving it to model faith.
+        recent = [
+            f"{h['ts']} [{h['trigger']}/{h['model']}] {h.get('summary', '')}"
+            for h in load_json(META_PATH, {}).get(project_path, {})
+            .get("history", [])
+            if h.get("outcome") == "ok"
+        ][-5:]
+        prompt = build_prompt(cfg, project_path, name, memory, digest,
+                              inbox_notes, recent_distills=recent or None)
 
         if dry_run:
             print(f"[dry-run] project={project_path} trigger={trigger} model={model}")
-            print(f"[dry-run] digest={len(digest)} chars from {len(digests)} span(s), "
+            print(f"[dry-run] digest={len(digest)} chars from {len(spans)} span(s), "
                   f"{len(inbox_notes)} inbox note(s), prompt={len(prompt)} chars")
             print(prompt[:1500])
             return True
@@ -178,13 +226,18 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
         result = validate(call_curator(cfg, prompt, model), memory)
 
         mem = os.path.join(project_path, ".memory")
-        for key, fname in (("state_body", "state.md"),
-                           ("decisions_body", "decisions.md"),
-                           ("todo_body", "todo.md")):
-            body = result.get(key)
-            if isinstance(body, str) and body.strip() and body.strip() != memory[fname]:
-                write_memory_file(os.path.join(mem, fname), body, name,
-                                  fname.split(".")[0])
+        for fname, new_body in apply_ops(result.get("ops", []),
+                                         {f: memory[f] for f in MEMORY_FILES}).items():
+            if new_body is None or not new_body.strip() or new_body == memory[fname]:
+                continue
+            if fname == "mistakes.md":
+                # append-only invariant: only set_body ops can reach this file,
+                # and they must not rewrite the audit log (dedupe_mistakes and
+                # enforce_budget_mistakes own its shape)
+                log(f"ignored set_body on mistakes.md (append-only): {project_path}")
+                continue
+            write_memory_file(os.path.join(mem, fname), new_body, name,
+                              fname.split(".")[0])
         new_mistakes = dedupe_mistakes(result.get("mistakes_new_entries", []),
                                        memory["mistakes.md"])
         if new_mistakes:
@@ -208,13 +261,15 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
             except OSError:
                 pass
 
-        meta_entry = {
-            "last_sync": dt.datetime.now().isoformat(timespec="seconds"),
-            "trigger": trigger,
-            "model": model,
-            "summary": str(result.get("summary", ""))[:300],
-        }
-        update_json(META_PATH, lambda m: m.__setitem__(project_path, meta_entry))
+        summary = str(result.get("summary", ""))[:300]
+        _journal(project_path, trigger, model=model, digest_chars=len(digest),
+                 outcome="ok", summary=summary,
+                 extra={
+                     "last_sync": dt.datetime.now().isoformat(timespec="seconds"),
+                     "trigger": trigger,
+                     "model": model,
+                     "summary": summary,
+                 })
 
         if cfg["git_commit"]:
             git_commit_memory(
@@ -226,6 +281,11 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
         return True
     except (RuntimeError, OSError) as e:
         log(f"distill FAILED {project_path} ({trigger}): {e}")
+        try:
+            _journal(project_path, trigger, outcome="fail",
+                     summary=str(e)[:200])
+        except (RuntimeError, OSError) as je:
+            log(f"journal write failed: {je}")
         return False
     finally:
         lock.close()

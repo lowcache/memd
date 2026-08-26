@@ -1,15 +1,33 @@
 """Transcript digestion: claude-code JSONL, antigravity SQLite/protobuf,
-credential redaction, and per-source dispatch."""
+generic text logs, credential redaction, and per-source dispatch.
+
+Every digester returns a Span: one session's worth of tagged lines plus the
+metadata (source tool, session id, UTC start/end, cwd) the curator needs to
+date events and merge parallel agent threads into one honest timeline."""
 
 import json
 import os
 import re
+import datetime as dt
+from dataclasses import dataclass, field
 
 from memd.config import AG_INDEX_PATH, load_config, load_json, log, save_json
 
 # --------------------------------------------------------------------------
 # transcript digestion
 # --------------------------------------------------------------------------
+
+
+@dataclass
+class Span:
+    source: str                      # "claude-code" | "antigravity" | "text-log"
+    file: str
+    session_id: str | None = None
+    start: str | None = None         # ISO-8601 UTC; mtime-derived when approx
+    end: str | None = None
+    cwd: str | None = None
+    lines: list[str] = field(default_factory=list)
+    approx: bool = False             # True -> start/end are file-mtime guesses
 
 
 def _flatten(content, limit):
@@ -26,11 +44,35 @@ def _flatten(content, limit):
     return str(content)[:limit]
 
 
-def digest_jsonl(path, offset):
+# Tool-input keys worth surfacing verbatim, in sniff priority order; anything
+# else falls back to a truncated JSON dump. Play-by-play inputs used to be fed
+# whole (300 chars of raw JSON per call), which let file-editing sessions drown
+# user intent out of the digest.
+SALIENT_INPUT_KEYS = ("command", "file_path", "path", "notebook_path",
+                      "pattern", "url", "query", "description", "topic",
+                      "prompt")
+
+
+def _salient_input(inp):
+    if isinstance(inp, dict):
+        bits = [str(inp[k]).strip()[:80] for k in SALIENT_INPUT_KEYS
+                if isinstance(inp.get(k), str) and inp[k].strip()]
+        if bits:
+            return " ".join(bits)[:160]
+    try:
+        return json.dumps(inp)[:160]
+    except (TypeError, ValueError):
+        return ""
+
+
+def digest_jsonl(path, offset, sidechains=False):
     """Digest new entries of a claude-code transcript from byte offset.
 
-    Returns (digest_text, new_offset)."""
-    lines = []
+    Returns (Span|None, new_offset). Sidechain (subagent) entries are skipped
+    unless sidechains=True, in which case they are emitted as indented
+    "  SUB> "-prefixed lines with tighter caps — delegated work belongs in
+    memory, at secondary signal strength."""
+    span = Span(source="claude-code", file=os.path.basename(path))
     try:
         with open(path, "rb") as f:
             f.seek(offset)
@@ -40,14 +82,27 @@ def digest_jsonl(path, offset):
         # unchanged offset means the content replays next sweep — safe, but
         # the failure must be visible in the log, not silent
         log(f"digest error: {e}")
-        return "", offset
+        return None, offset
     for rawline in raw.splitlines():
         try:
             e = json.loads(rawline)
         except (json.JSONDecodeError, UnicodeDecodeError):
             continue
-        if e.get("isSidechain") or e.get("isMeta"):
+        ts = e.get("timestamp")
+        if isinstance(ts, str):
+            if span.start is None or ts < span.start:
+                span.start = ts
+            if span.end is None or ts > span.end:
+                span.end = ts
+        span.session_id = span.session_id or e.get("sessionId")
+        span.cwd = span.cwd or e.get("cwd")
+        if e.get("isMeta"):
             continue
+        sub = ""
+        if e.get("isSidechain"):
+            if not sidechains:
+                continue
+            sub = "  SUB> "
         etype = e.get("type")
         msg = e.get("message") or {}
         content = msg.get("content")
@@ -55,7 +110,7 @@ def digest_jsonl(path, offset):
             if isinstance(content, str):
                 t = content.strip()
                 if t and not t.startswith("<"):  # skip injected reminders
-                    lines.append("U: " + t[:2500])
+                    span.lines.append(sub + "U: " + t[:800 if sub else 2500])
             elif isinstance(content, list):
                 for b in content:
                     if not isinstance(b, dict):
@@ -63,9 +118,15 @@ def digest_jsonl(path, offset):
                     if b.get("type") == "text":
                         t = (b.get("text") or "").strip()
                         if t and not t.startswith("<"):
-                            lines.append("U: " + t[:2500])
+                            span.lines.append(
+                                sub + "U: " + t[:800 if sub else 2500])
                     elif b.get("type") == "tool_result":
-                        lines.append("R: " + _flatten(b.get("content"), 240))
+                        r = _flatten(b.get("content"), 1_000_000)
+                        # size-aware placeholder instead of a 240-char echo:
+                        # results are the bulk of any file-heavy session
+                        if r.strip():
+                            span.lines.append(
+                                sub + f"R: [{len(r)} ch] " + r[:120 if sub else 80].strip())
         elif etype == "assistant" and isinstance(content, list):
             for b in content:
                 if not isinstance(b, dict):
@@ -73,14 +134,12 @@ def digest_jsonl(path, offset):
                 if b.get("type") == "text":
                     t = (b.get("text") or "").strip()
                     if t:
-                        lines.append("A: " + t[:2500])
+                        span.lines.append(
+                            sub + "A: " + t[:800 if sub else 2500])
                 elif b.get("type") == "tool_use":
-                    try:
-                        inp = json.dumps(b.get("input", {}))[:300]
-                    except (TypeError, ValueError):
-                        inp = ""
-                    lines.append(f"T: {b.get('name', '?')} {inp}")
-    return "\n".join(lines), new_offset
+                    span.lines.append(sub + "T: " + (b.get("name") or "?")
+                                      + " " + _salient_input(b.get("input", {})))
+    return (span if span.lines else None), new_offset
 
 
 # Sessions sometimes read credentials; never let them reach the curator.
@@ -240,7 +299,8 @@ def _ag_clean(s):
 def digest_ag_db(path, last_idx):
     """Digest antigravity conversation steps with idx > last_idx.
 
-    Returns (digest_text, new_last_idx)."""
+    Returns (Span|None, new_last_idx). The DB stores no wall-clock per step,
+    so start/end fall back to the file's mtime, marked approximate."""
     lines = []
     new_idx = last_idx
     try:
@@ -251,7 +311,7 @@ def digest_ag_db(path, last_idx):
         con.close()
     except Exception as e:
         log(f"ag digest failed for {path}: {e}")
-        return "", last_idx
+        return None, last_idx
     for idx, st, payload in rows:
         new_idx = max(new_idx, idx)
         if st not in AG_KNOWN_STEP_TYPES:
@@ -280,7 +340,18 @@ def digest_ag_db(path, last_idx):
                     continue
         elif st == AG_STEP_ERROR:
             lines.append("E: " + _ag_clean(max(strs, key=len))[:300])
-    return "\n".join(lines), new_idx
+    if not lines:
+        return None, new_idx
+    span = Span(source="antigravity", file=os.path.basename(path),
+                lines=lines, approx=True)
+    try:
+        iso = dt.datetime.fromtimestamp(
+            os.path.getmtime(path), tz=dt.timezone.utc)
+        stamp = iso.strftime("%Y-%m-%dT%H:%M:%SZ")
+        span.start = span.end = stamp
+    except OSError:
+        pass
+    return span, new_idx
 
 
 def _ag_assign_project(db, roots):
@@ -340,18 +411,181 @@ def project_ag_dbs(cfg, project_path):
     return sorted(out)
 
 
-def digest_source(src, cursor):
-    """Dispatch to the right digester. Returns (text, new_cursor)."""
+def digest_source(cfg, src, cursor):
+    """Dispatch to the right digester. Returns (Span|None, new_cursor).
+
+    Dispatch is content-sniffed so ANY tool's transcript can ride
+    extra_sources; the only config input today is capture_sidechains."""
     if src.endswith(".db"):
         return digest_ag_db(src, cursor)
-    return digest_jsonl(src, cursor)
+    return sniff_and_digest(src, cursor,
+                            sidechains=bool(cfg.get("capture_sidechains")))
+
+
+# --- generic text-log adapter -----------------------------------------------
+# The escape hatch that makes memd tool-agnostic: any CLI's session log can be
+# pointed at via extra_sources and digested as best-effort prose. Role tagging
+# is heuristic (common "user:"/"assistant:"/"tool" markers); untagged chunks
+# pass through bare — the curator tolerates unattributed lines, and the
+# alternative (refusing unknown formats) is how ingest-stall blindspots happen.
+
+_ROLE_RE = re.compile(
+    r"^(?:>\s*)?(?:(user|human)\b[:\s]?|(assistant|ai)\b[:\s]?|(tool)\b[:\s]?)",
+    re.IGNORECASE)
+
+
+def digest_text_log(path, offset):
+    """Digest an arbitrary text log from byte offset into heuristic turns.
+
+    Returns (Span|None, new_offset)."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            raw = f.read()
+            new_offset = f.tell()
+    except OSError as e:
+        log(f"digest error: {e}")
+        return None, offset
+    text = raw.decode("utf-8", "replace")
+    span = Span(source="text-log", file=os.path.basename(path),
+                session_id=os.path.basename(path)[:12], approx=True)
+    try:
+        iso = dt.datetime.fromtimestamp(
+            os.path.getmtime(path), tz=dt.timezone.utc)
+        stamp = iso.strftime("%Y-%m-%dT%H:%M:%SZ")
+        span.start = span.end = stamp
+    except OSError:
+        pass
+    for chunk in re.split(r"\n\s*\n", text):  # blank-line paragraph split
+        flat = " ".join(chunk.split())
+        if not flat:
+            continue
+        m = _ROLE_RE.match(flat)
+        tag = ""
+        if m:
+            tag = {m.group(1): "U: ", m.group(2): "A: ",
+                   m.group(3): "T: "}.get(
+                       next(g for g in m.groups() if g), "")
+            flat = flat[m.end():].strip()
+        if not flat:
+            continue
+        span.lines.append(tag + flat[:1200])
+    return (span if span.lines else None), new_offset
+
+
+def sniff_and_digest(path, cursor, sidechains=False):
+    """Content-sniffing dispatch for non-.db sources: a first line that parses
+    as JSON with claude-code's shape routes to the JSONL digester, anything
+    else degrades to the generic text-log path instead of stalling."""
+    probe = b""
+    try:
+        with open(path, "rb") as f:
+            probe = f.read(4096)
+    except OSError as e:
+        log(f"digest error: {e}")
+        return None, cursor
+    for line in probe.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            break  # first real line isn't JSON -> not a JSONL transcript
+        if isinstance(e, dict) and "type" in e \
+                and ("message" in e or "timestamp" in e):
+            return digest_jsonl(path, cursor, sidechains=sidechains)
+        break
+    return digest_text_log(path, cursor)
 
 
 def baseline_cursor(src):
     return ag_max_idx(src) if src.endswith(".db") else os.path.getsize(src)
 
 
+# --- span assembly: render, order, budget ------------------------------------
+
+
+def _fmt_ts(ts):
+    """'2026-08-24T14:32:11.123Z' -> '2026-08-24 14:32' (display form)."""
+    return ts[:16].replace("T", " ") if ts else None
+
+
+def render_span(span):
+    """Header + tagged lines. The header is what lets the curator date events
+    and what truncation markers quote when spans are dropped for budget."""
+    parts = [f"source={span.source}"]
+    if span.session_id:
+        parts.append(f"session={span.session_id[:12]}")
+    mark = "≈ " if span.approx else ""
+    t0, t1 = _fmt_ts(span.start), _fmt_ts(span.end)
+    if t0 and t1:
+        parts.append(f"{mark}{t0}→{t1} UTC")
+    elif t0 or t1:
+        parts.append(f"{mark}{t0 or t1} UTC")
+    else:
+        parts.append("undated")
+    if span.cwd:
+        parts.append(f"cwd={span.cwd}")
+    return "--- session span | " + " | ".join(parts) + " ---" \
+        + "\n" + "\n".join(span.lines)
+
+
+def sort_spans(spans):
+    """Chronological ascending; undated spans sort last, stable otherwise."""
+    return sorted(spans, key=lambda s: (s.start or "9999")[:19])
+
+
+def score_span(span):
+    """Signal score for budget triage: user intent outweighs everything, then
+    errors; assistant volume counts once, bulk adds a bounded bonus. Purely
+    structural — no NLP, deterministic across runs."""
+    u = sum(1 for ln in span.lines if ln.lstrip().startswith("U: "))
+    e = sum(1 for ln in span.lines if ln.lstrip().startswith("E: "))
+    a = sum(1 for ln in span.lines if ln.lstrip().startswith("A: "))
+    chars = sum(len(ln) for ln in span.lines)
+    return 3 * u + 2 * e + a + min(chars // 4000, 3)
+
+
+def truncate_spans(spans, cap):
+    """Budget triage that drops WHOLE low-signal spans instead of silently
+    eliding the middle of the timeline.
+
+    Returns (kept_spans, omitted_labels). kept preserves input order. The
+    newest span is never dropped (most recent context wins ties with
+    everything). Labels describe each dropped span so the curator at least
+    knows THAT something happened, and WHEN. If nothing is droppable (one
+    oversize span), kept still exceeds cap — the caller applies cap_digest()'s
+    head/tail elision to the rendered join as the last resort."""
+    texts = [(s, render_span(s)) for s in spans]
+    if sum(len(t) for _, t in texts) <= cap or not spans:
+        return list(spans), []
+    kept_idx = list(range(len(spans)))
+    newest = max(range(len(spans)), key=lambda i: (spans[i].start or "")[:19])
+
+    def total(idxs):
+        return sum(len(texts[i][1]) for i in idxs)
+
+    omitted = []
+    while total(kept_idx) > cap and len(kept_idx) > 1:
+        droppable = [i for i in kept_idx if i != newest]
+        # len(kept_idx) > 1 guarantees droppable is non-empty
+        drop = min(droppable, key=lambda i: (
+            score_span(spans[i]), len(texts[i][1]), texts[i][1]))
+        s = spans[drop]
+        mark = "≈ " if s.approx else ""
+        when = (_fmt_ts(s.start) or "undated") + (
+            "→" + _fmt_ts(s.end) if s.end and s.start else "")
+        omitted.append(f"{when} UTC ({s.source}, dropped: low signal)")
+        kept_idx.remove(drop)
+    labels = [f"[... omitted: {len(omitted)} low-signal span(s): "
+              + " ; ".join(omitted) + " ...]"] if omitted else []
+    return [spans[i] for i in kept_idx], labels
+
+
 def cap_digest(text, cap):
+    """Last-resort single-text elision (head/tail) for a span too large to
+    keep even alone — whole-span dropping has nothing left to sacrifice."""
     if len(text) <= cap:
         return text
     head = int(cap * 0.3)

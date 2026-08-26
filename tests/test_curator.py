@@ -148,3 +148,245 @@ def test_retry_exhaustion_raises_last_error(memd, cfg_for, no_retry_delay):
     with open(memd.LOG_PATH) as f:
         # first two attempts logged as retries, third raised
         assert f.read().count("failed, retrying in") == 2
+
+
+# --------------------------------------------------------------------------
+# validate(): section-op normalization & policing
+# --------------------------------------------------------------------------
+
+EMPTY_MEMORY = {"state.md": "", "decisions.md": "", "todo.md": "",
+                "mistakes.md": ""}
+
+
+def test_validate_legacy_bodies_convert_to_set_body_ops(memd):
+    result = {"summary": "s", "state_body": "## S\n\nfact.",
+              "decisions_body": None, "todo_body": None}
+    out = memd.validate(result, dict(EMPTY_MEMORY))
+    assert out["ops"] == [{"op": "set_body", "file": "state.md",
+                           "body": "## S\n\nfact."}]
+    assert out["decisions_body"] is None
+    assert out["todo_body"] is None
+    # transition mirror: callers predating apply_ops read these keys
+    assert out["state_body"] == "## S\n\nfact."
+    assert set(out) >= {"summary", "ops", "mistakes_new_entries",
+                        "archive_entries"}
+
+
+def test_validate_legacy_empty_string_body_is_noop(memd):
+    # legacy sync skipped falsy bodies; conversion must not resurrect them as
+    # shrink-guard trips or wholesale wipes
+    out = memd.validate({"state_body": ""}, dict(EMPTY_MEMORY))
+    assert out["ops"] == []
+    assert out["state_body"] is None
+
+
+def test_validate_native_ops_pass_through(memd):
+    ops = [{"op": "replace_section", "file": "todo.md", "heading": "## T",
+            "body": "done: x"},
+           {"op": "delete_section", "file": "decisions.md",
+            "heading": "### Old"}]
+    out = memd.validate({"summary": "s", "ops": ops}, dict(EMPTY_MEMORY))
+    assert out["ops"] == ops
+
+
+@pytest.mark.parametrize("bad_op,match", [
+    ({"op": "explode", "file": "state.md", "heading": "## A"}, r"unknown op"),
+    ({"op": "replace_section", "file": "notes.txt", "heading": "## A",
+      "body": "x"}, r"unknown file"),
+    ({"op": "replace_section", "file": "state.md", "body": "x"},
+     r"missing or non-string heading"),
+    ({"op": "delete_section", "file": "state.md"},
+     r"missing or non-string heading"),
+    ({"op": "append_section", "file": "state.md", "heading": "## A"},
+     r"missing or non-string body"),
+    ({"op": "set_body", "file": "state.md"},
+     r"missing or non-string body"),
+    ({"op": "replace_section", "file": "state.md", "heading": 7, "body": "x"},
+     r"non-string heading"),
+    ({"op": "set_body", "file": "state.md", "body": 7},
+     r"non-string body"),
+    ({"op": "replace_section", "file": "mistakes.md", "heading": "### A",
+      "body": "x"}, r"append-only"),
+    ({"op": "append_section", "file": "mistakes.md", "heading": "### A",
+      "body": "x"}, r"append-only"),
+    ({"op": "delete_section", "file": "mistakes.md", "heading": "### A"},
+     r"append-only"),
+])
+def test_validate_rejects_bad_ops(memd, bad_op, match):
+    with pytest.raises(memd.CuratorError, match=match):
+        memd.validate({"summary": "s", "ops": [bad_op]}, dict(EMPTY_MEMORY))
+
+
+def test_validate_rejects_malformed_ops_container(memd):
+    with pytest.raises(memd.CuratorError, match="ops is not a list"):
+        memd.validate({"ops": {"op": "set_body"}}, dict(EMPTY_MEMORY))
+    with pytest.raises(memd.CuratorError, match="ops\\[0\\] is not an object"):
+        memd.validate({"ops": ["set_body"]}, dict(EMPTY_MEMORY))
+
+
+def test_validate_allows_set_body_on_mistakes(memd):
+    body = "# Mistake Audit Log (append-only)\n\n### 2026-01-01 — x\nwhy."
+    out = memd.validate({"ops": [{"op": "set_body", "file": "mistakes.md",
+                                  "body": body}]}, dict(EMPTY_MEMORY))
+    assert out["ops"][0]["body"] == body
+
+
+def test_validate_drops_skeleton_set_body(memd):
+    out = memd.validate(
+        {"ops": [{"op": "set_body", "file": "todo.md",
+                  "body": memd.SKELETONS["todo.md"]}]},
+        {"state.md": "", "decisions.md": "", "mistakes.md": "",
+         "todo.md": "real todo content"})
+    assert out["ops"] == []
+    assert out["todo_body"] is None
+    with open(memd.LOG_PATH) as f:
+        assert "; treated as no-change" in f.read()
+
+
+def test_validate_strips_fences_and_frontmatter_inside_op_bodies(memd):
+    out = memd.validate({"ops": [
+        {"op": "set_body", "file": "state.md",
+         "body": "```markdown\n---\ntype: state\n---\n## S\n\nfact.\n```"},
+        {"op": "replace_section", "file": "todo.md", "heading": "## T",
+         "body": "```\nfenced fact.\n```"}]}, dict(EMPTY_MEMORY))
+    assert out["ops"][0]["body"] == "## S\n\nfact."
+    assert out["ops"][1]["body"] == "fenced fact."
+    with open(memd.LOG_PATH) as f:
+        log_text = f.read()
+        assert log_text.count("stripped fences/frontmatter from") == 2
+
+
+def big_memory():
+    return {"state.md": "S" * 1000, "decisions.md": "", "todo.md": "",
+            "mistakes.md": ""}
+
+
+def test_validate_shrink_guard_on_set_body(memd):
+    with pytest.raises(memd.CuratorError, match="shrink guard.*state\\.md"):
+        memd.validate({"ops": [{"op": "set_body", "file": "state.md",
+                                "body": "x" * 100}]}, big_memory())
+
+
+def test_validate_shrink_guard_archive_compensates_on_set_body(memd):
+    out = memd.validate(
+        {"ops": [{"op": "set_body", "file": "state.md", "body": "x" * 100}],
+         "archive_entries": [{"source": "state.md", "content": "y" * 400}]},
+        big_memory())
+    assert len(out["ops"]) == 1
+
+
+def test_validate_legacy_shrink_guard_names_the_key(memd):
+    memory = {"state.md": "", "decisions.md": "D" * 2000, "todo.md": "",
+              "mistakes.md": ""}
+    with pytest.raises(memd.CuratorError,
+                       match="shrink guard.*decisions_body"):
+        memd.validate({"decisions_body": "x" * 10}, memory)
+
+
+def test_validate_summary_normalized_and_defaults_present(memd):
+    out = memd.validate({"summary": 42}, {})
+    assert out["summary"] == ""
+    for key in ("ops", "mistakes_new_entries", "archive_entries"):
+        assert out[key] == []
+
+
+def test_validate_rejects_bad_mistakes_entries(memd):
+    with pytest.raises(memd.CuratorError, match="not a list"):
+        memd.validate({"mistakes_new_entries": "### x"}, dict(EMPTY_MEMORY))
+    with pytest.raises(memd.CuratorError, match="non-string"):
+        memd.validate({"mistakes_new_entries": ["ok", 1]}, dict(EMPTY_MEMORY))
+
+
+def test_validate_rejects_non_dict(memd):
+    with pytest.raises(memd.CuratorError, match="not an object"):
+        memd.validate(["nope"], dict(EMPTY_MEMORY))
+
+
+# --------------------------------------------------------------------------
+# apply_ops(): pure section-op application
+# --------------------------------------------------------------------------
+
+CANON_BODY = ("# Title\n\nPreamble line.\n\n## One\n\nfirst body\n\n"
+              "## Two\n\nsecond body\n\n### Nested\n\nthird body\n")
+
+
+def test_split_join_roundtrips_byte_identically(memd):
+    pre, secs = memd.curator._split_sections_raw(CANON_BODY)
+    assert pre == "# Title\n\nPreamble line.\n\n"
+    assert [s[0] for s in secs] == ["## One", "## Two", "### Nested"]
+    assert memd.curator._join_sections_raw(pre, secs) == CANON_BODY
+    ragged = "# T\nline two\n## A\nno trailing newline"
+    pre, secs = memd.curator._split_sections_raw(ragged)
+    assert memd.curator._join_sections_raw(pre, secs) == ragged
+
+
+def test_apply_ops_empty_means_unchanged(memd):
+    bodies = {"state.md": CANON_BODY, "todo.md": ""}
+    assert memd.curator.apply_ops([], bodies) == {"state.md": None,
+                                                  "todo.md": None}
+
+
+def test_apply_ops_replace_with_identical_body_roundtrips(memd):
+    out = memd.curator.apply_ops(
+        [{"op": "replace_section", "file": "s", "heading": "## Two",
+          "body": "second body"}],
+        {"s": CANON_BODY})
+    assert out["s"] == CANON_BODY
+
+
+def test_apply_ops_composes_left_to_right_within_a_file(memd):
+    out = memd.curator.apply_ops([
+        {"op": "delete_section", "file": "s", "heading": "### Nested"},
+        {"op": "replace_section", "file": "s", "heading": "## Two",
+         "body": "new two"},
+        {"op": "append_section", "file": "s", "heading": "Three",
+         "body": "appended"},
+    ], {"s": CANON_BODY})
+    body = out["s"]
+    assert "first body" in body                      # untouched section kept
+    assert body.startswith("# Title")                # preamble kept
+    assert "third body" not in body and "Nested" not in body
+    assert "second body" not in body and "new two" in body
+    assert "## Three\n\nappended" in body            # prefix normalized to h2
+
+
+def test_apply_ops_files_are_independent(memd):
+    out = memd.curator.apply_ops(
+        [{"op": "set_body", "file": "todo.md", "body": "T"},
+         {"op": "replace_section", "file": "decisions.md", "heading": "## D",
+          "body": "d"}],
+        {"state.md": CANON_BODY, "decisions.md": "## D\n\nold\n",
+         "todo.md": "x"})
+    assert out == {"state.md": None, "decisions.md": "## D\n\nd\n\n",
+                   "todo.md": "T"}
+
+
+def test_apply_ops_append_normalizes_missing_prefix(memd):
+    out = memd.curator.apply_ops(
+        [{"op": "append_section", "file": "p", "heading": "Fresh", "body": "b"}],
+        {"p": "# P\n\ntext"})
+    assert out["p"].endswith("\n## Fresh\n\nb\n\n")
+
+
+def test_apply_ops_append_existing_heading_raises(memd):
+    with pytest.raises(memd.CuratorError,
+                       match="already exists.*## One.*replace_section"):
+        memd.curator.apply_ops(
+            [{"op": "append_section", "file": "s", "heading": "One",
+              "body": "x"}], {"s": CANON_BODY})
+
+
+@pytest.mark.parametrize("kind", ["replace_section", "delete_section"])
+def test_apply_ops_missing_heading_raises_naming_file_and_heading(memd, kind):
+    with pytest.raises(memd.CuratorError,
+                       match=r"no section '## Nope' in s\b"):
+        memd.curator.apply_ops(
+            [{"op": kind, "file": "s", "heading": "## Nope", "body": "x"}],
+            {"s": CANON_BODY})
+
+
+def test_apply_ops_set_body_replaces_wholesale(memd):
+    out = memd.curator.apply_ops(
+        [{"op": "set_body", "file": "s", "body": "brand new"}],
+        {"s": CANON_BODY})
+    assert out["s"] == "brand new"

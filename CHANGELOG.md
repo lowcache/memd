@@ -8,9 +8,70 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-26
+
+Token economics, timeline honesty, and tool independence: distills cost
+markedly less on both the input and output side, submissions carry the
+context the curator previously had to guess, and the digest pipeline accepts
+transcripts from any CLI, not just claude-code.
+
+### Added
+
+- Timestamped session spans: every digested span carries a header with source
+  tool, session id, UTC start/end, and cwd; spans are sorted chronologically
+  across all sources before curation. The charter demanded absolute dates the
+  digest never contained — now it has them, and multi-agent threads merge in
+  real order instead of filename order
+- Gap-aware budget triage: when a digest exceeds `digest_cap_chars`, whole
+  low-signal spans are dropped (user-intent-weighted scoring) and named in an
+  explicit omission marker, replacing cap_digest's silent middle elision that
+  erased whatever work happened to sit mid-timeline. Head/tail elision remains
+  only as the last resort for a single oversize span
+- Section-patch curator protocol: the model returns targeted section ops
+  (`replace_section`/`append_section`/`delete_section`, `set_body` as last
+  resort) instead of re-emitting full file bodies — output tokens drop by an
+  order of magnitude on mature memories, git diffs become surgical, and
+  legacy full-body outputs are still accepted and converted
+- Distill journal: meta.json keeps a rolling per-project history (trigger,
+  model, digest size, outcome, summary) surfaced in `memd status` and fed to
+  the curator as PREVIOUS DISTILLS, so failed-distill gaps are visible and the
+  do-not-reapply rule finally has evidence instead of relying on model faith
+- Universal ingestion adapter: non-claude, non-antigravity transcript sources
+  are content-sniffed and best-effort digested as text with heuristic role
+  tagging, so any CLI's logs ride `extra_sources` — unknown formats now work
+  instead of stalling. The ingest-stall signal survives for what it can still
+  mean: claude-shaped JSONL that stops yielding lines
+- Subagent capture: sidechain entries ride along as indented `SUB>` lines
+  (config `capture_sidechains`, default on). Delegated work no longer
+  vanishes from memory between "task delegated" and its outcome
+- Inbox provenance: notes without frontmatter get `date:`/`source:` normalized
+  onto them at write time, and the reader lifts both into the curator label;
+  frontmatter does not count against the note size budget
+- Self-sufficient brief: session-start briefs end with a compact per-file
+  index (last_updated, size, headings) and the protocol text now asks agents
+  to open memory files selectively rather than blanket re-reading all four
+  files whose contents the brief largely embeds
+
 ### Changed
 
-- `model_small` now defaults to `sonnet` rather than `haiku`, so both tiers ship
+- Tool play-by-play is compressed in digests: results become size-aware
+  placeholders (`R: [18.2k ch] first chars…`) and tool calls keep only
+  salient arguments, so file-heavy sessions stop drowning user intent and
+  forcing early budget truncation
+- mistakes.md is sent to the curator as heading list + newest entry (capped)
+  instead of the full 22K-char append-only log it may only append to anyway
+
+### Fixed
+
+- `set_body` ops targeting mistakes.md are ignored at apply time: the audit
+  log stays append-only through `mistakes_new_entries` regardless of what the
+  model returns
+
+## [0.3.3] - 2026-07-30
+
+### Changed
+
+- `model_small` defaults to `sonnet` rather than `haiku`, so both tiers ship
   the same capable model. Curation quality is the product, and someone trying
   memd for the first time cannot distinguish a weak default model from a weak
   tool — they stop using it without ever finding the config key. Set
@@ -29,8 +90,6 @@ and this project adheres to
   be reached at all, since any non-zero `git ls-remote` exit was read as
   absence. An unreachable remote now warns instead of passing a gate whose
   purpose is to prevent a duplicate release
-
-## [0.3.3] - 2026-07-30
 
 ### Added
 

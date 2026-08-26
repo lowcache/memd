@@ -40,8 +40,8 @@ ROWS = [
 
 def test_digest_ag_db_extracts_text_and_cursor(memd, env):
     db = make_ag_db(str(env.tmp / "conv.db"), ROWS)
-    digest, new_idx = memd.digest_ag_db(db, 0)
-    lines = digest.splitlines()
+    span, new_idx = memd.digest_ag_db(db, 0)
+    lines = span.lines
 
     assert "U: Please refactor the sync module today" in lines
     assert "A: I refactored sync and added tests" in lines
@@ -52,20 +52,24 @@ def test_digest_ag_db_extracts_text_and_cursor(memd, env):
     assert len(lines) == 4
     # cursor is the max idx seen, including line-less steps
     assert new_idx == 6
+    # no wall-clock in the DB: mtime fallback, marked approximate
+    assert span.source == "antigravity"
+    assert span.approx
+    assert span.start == span.end
 
 
 def test_digest_ag_db_resume_from_cursor(memd, env):
     db = make_ag_db(str(env.tmp / "conv.db"), ROWS)
     _, idx = memd.digest_ag_db(db, 0)
     d2, idx2 = memd.digest_ag_db(db, idx)
-    assert d2 == ""
+    assert d2 is None
     assert idx2 == idx
 
     # partial resume only sees rows past the cursor
     d3, idx3 = memd.digest_ag_db(db, 2)
-    assert "Please refactor" not in d3
-    assert "I refactored sync" not in d3
-    assert "T: Ran pytest on tests/" in d3.splitlines()
+    assert not any("Please refactor" in ln for ln in d3.lines)
+    assert not any("I refactored sync" in ln for ln in d3.lines)
+    assert "T: Ran pytest on tests/" in d3.lines
     assert idx3 == 6
 
 
@@ -85,7 +89,7 @@ def test_ag_max_idx_missing_db(memd, env):
 
 def test_digest_ag_db_missing_db(memd, env):
     d, idx = memd.digest_ag_db(str(env.tmp / "no-such.db"), 5)
-    assert d == ""
+    assert d is None
     assert idx == 5
 
 

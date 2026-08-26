@@ -15,7 +15,7 @@ the invariants the model must not be trusted with: frontmatter, append-only
 mistakes.md, shrink guard, size budgets, archive overflow, git audit commits.
 """
 
-__version__ = "0.3.3"
+__version__ = "0.4.0"
 
 from memd.errors import ConfigError, CuratorError, DigestError, MemdError
 from memd.config import (
@@ -87,11 +87,17 @@ from memd.digest import (
     digest_ag_db,
     digest_jsonl,
     digest_source,
+    digest_text_log,
     project_ag_dbs,
     redact,
+    render_span,
+    score_span,
+    sniff_and_digest,
+    sort_spans,
+    truncate_spans,
 )
 from memd.inbox import collect_inbox, write_inbox_note
-from memd.curator import CHARTER, build_prompt, call_curator, validate
+from memd.curator import CHARTER, apply_ops, build_prompt, call_curator, validate
 from memd.sync import (
     INGEST_STALL_BYTES,
     encode_claude_dir,
