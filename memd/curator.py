@@ -93,7 +93,7 @@ OUTPUT — exactly one JSON object, no markdown fences, no prose around it:
 {
   "summary": "<one line: what changed in memory>",
   "ops": [{"op": "replace_section" | "append_section" | "delete_section" | "set_body",
-           "file": "state.md" | "decisions.md" | "todo.md" | "mistakes.md",
+           "file": "state.md" | "decisions.md" | "todo.md",
            "heading": "<exact current h2/h3 heading>",
            "body": "<new section body, or the full body for set_body>"}],
   "mistakes_new_entries": ["### YYYY-MM-DD — <title>\\n<symptom/cause/prevention>", ...],
@@ -275,7 +275,23 @@ def _call_curator_once(cfg, prompt, model):
 
 # Section-op protocol: the only op names and files validate() accepts.
 OP_NAMES = ("replace_section", "append_section", "delete_section", "set_body")
+# mistakes.md is accepted here but NOT advertised in the charter's output
+# schema: only a legacy full-body curator can name it, and sync drops that
+# write to keep the log append-only. Advertising it invited the section ops
+# that validate() then rejects outright.
 OP_FILES = ("state.md", "decisions.md", "todo.md", "mistakes.md")
+
+# A curated file may not lose more than this share of its size in one distill
+# unless the loss is accounted for by archive_entries. Models over-prune, and
+# memory loss is the one failure this tool exists to prevent.
+SHRINK_FLOOR = 0.4
+SHRINK_GUARD_MIN = 800   # under this, the ratio is too noisy to mean anything
+
+
+def _shrunk(old, new, archived):
+    return (len(old) > SHRINK_GUARD_MIN
+            and len(new) + archived < len(old) * SHRINK_FLOOR)
+
 
 # Legacy full-file keys -> the files they map to. Accepted until the section-op
 # protocol has been out long enough to retire curators pinned to it; each
@@ -380,12 +396,27 @@ def validate(result, memory):
                     "no-change")
                 continue
             old = memory.get(fname, "") or ""
-            if len(old) > 800 and len(entry["body"]) + archived < len(old) * 0.4:
+            if _shrunk(old, entry["body"], archived):
                 raise CuratorError(
                     f"shrink guard tripped on {label} "
                     f"({len(old)} -> {len(entry['body'])} chars, "
                     f"{archived} archived)")
         ops.append(entry)
+
+    # Same guard, applied to what section ops actually PRODUCE. A per-op check
+    # cannot see the cumulative result: delete_section on every heading leaves
+    # a file holding nothing but its title, and each op looks harmless alone.
+    # The set_body check above stays only because it can name the offending op.
+    section_files = {e["file"] for e in ops if e["op"] != "set_body"}
+    if section_files:
+        applied = apply_ops(ops, {f: memory.get(f, "") or "" for f in OP_FILES},
+                            skipped=[])
+        for fname in sorted(section_files):
+            old, new = memory.get(fname, "") or "", applied.get(fname)
+            if new is not None and _shrunk(old, new, archived):
+                raise CuratorError(
+                    f"shrink guard tripped on {fname} section ops "
+                    f"({len(old)} -> {len(new)} chars, {archived} archived)")
 
     result["summary"] = result["summary"] if isinstance(
         result.get("summary"), str) else ""
@@ -404,6 +435,9 @@ def validate(result, memory):
     # Mirrors of the final set_body state per file: exactly what legacy
     # callers read. Section-only outputs mirror as None (old callers then
     # write nothing — acceptable mid-transition, apply_ops is the real path).
+    # CEILING: transition scaffolding. These keys and LEGACY_BODY_KEYS exist
+    # only for curators pinned to the pre-0.4.0 full-body contract; drop both
+    # (and the phase-1 conversion) in 0.6.0.
     written = {e["file"]: e["body"] for e in ops if e["op"] == "set_body"}
     for key, fname in LEGACY_BODY_KEYS:
         result[key] = written.get(fname)
@@ -441,6 +475,13 @@ def _join_sections_raw(preamble, secs):
 def _apply_section_op(op, body):
     """One replace/append/delete op against one file body.
 
+    Returns (new_body, None) when the op applies, or (None, reason) when its
+    heading does not resolve. Exact-heading matching is the most
+    hallucination-sensitive interface in the pipeline, and one invented heading
+    used to raise — discarding every valid op in the same batch, failing the
+    distill, and replaying the identical digest into the identical model next
+    sweep. A bad op is now dropped on its own; the caller reports it.
+
     Sections match their FULL heading line exactly ('## '/'### ' prefix and
     inline text); touched sections re-space canonically ('\n\n' around the
     body) while untouched text is preserved byte-for-byte."""
@@ -451,38 +492,47 @@ def _apply_section_op(op, body):
         if not heading.startswith(("## ", "### ")):
             heading = "## " + heading  # curator omitted the prefix; assume h2
         if any(s[0] == heading for s in secs):
-            raise CuratorError(
-                f"append_section: heading already exists in {fname}: {heading!r}"
-                " — use replace_section")
+            return None, (f"append_section: heading already exists in {fname}: "
+                          f"{heading!r} — use replace_section")
         if secs:
             if not secs[-1][1].endswith("\n"):
                 secs[-1][1] += "\n"
         elif preamble and not preamble.endswith("\n"):
             preamble += "\n"
         secs.append([heading, "\n\n" + (op.get("body") or "").strip() + "\n\n"])
-        return _join_sections_raw(preamble, secs)
+        return _join_sections_raw(preamble, secs), None
     idx = next((i for i, s in enumerate(secs) if s[0] == heading), None)
     if idx is None:
-        raise CuratorError(f"{kind}: no section {heading!r} in {fname}")
+        return None, f"{kind}: no section {heading!r} in {fname}"
     if kind == "replace_section":
         secs[idx][1] = "\n\n" + (op.get("body") or "").strip() + "\n\n"
     else:  # delete_section removes heading+body wholesale
         del secs[idx]
-    return _join_sections_raw(preamble, secs)
+    return _join_sections_raw(preamble, secs), None
 
 
-def apply_ops(ops, bodies):
+def apply_ops(ops, bodies, skipped=None):
     """Pure section-op application (no I/O, no validation): ops + current
     bodies -> {fname: new_body_or_None}, None meaning "unchanged, do not
     write". Ops compose left-to-right within a file; files are independent;
-    set_body replaces wholesale. Expects ops already through validate()."""
+    set_body replaces wholesale. Expects ops already through validate().
+
+    Ops whose heading does not resolve are dropped, and their reason appended
+    to `skipped` when the caller passes a list — logging is the caller's job,
+    so this stays pure. A file whose ops all skipped is reported unchanged."""
     work = {}
     for op in ops:
         fname = op["file"]
-        if fname not in work:
-            work[fname] = bodies.get(fname, "")
-        work[fname] = (_apply_section_op(op, work[fname])
-                       if op["op"] != "set_body" else op["body"])
+        base = work[fname] if fname in work else bodies.get(fname, "")
+        if op["op"] == "set_body":
+            work[fname] = op["body"]
+            continue
+        new, reason = _apply_section_op(op, base)
+        if new is None:
+            if skipped is not None:
+                skipped.append(reason)
+            continue
+        work[fname] = new
     out = dict.fromkeys(bodies, None)
     out.update(work)
     return out

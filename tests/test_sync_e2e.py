@@ -133,3 +133,36 @@ def test_sync_set_body_on_mistakes_is_ignored(e2e, memd, memd_config,
     assert "pre-existing entry" in mist      # audit log untouched
     assert "hijacked" not in mist
     assert "legit section edit" in e2e.read_mem("state.md")  # sibling op applied
+
+
+def test_sync_survives_an_invented_heading(e2e, memd, memd_config,
+                                           fake_curator):
+    """Exact-heading matching is the most hallucination-sensitive interface in
+    the pipeline. One invented heading used to raise, discarding every valid op
+    in the batch, failing the distill, and replaying the identical digest into
+    the identical model next sweep."""
+    assert e2e.sync().returncode == 0  # seed state.md via the default curator
+
+    canned = json.dumps({
+        "summary": "half-invented",
+        "ops": [
+            {"op": "replace_section", "file": "state.md",
+             "heading": "## System State", "body": "applied anyway"},
+            {"op": "replace_section", "file": "state.md",
+             "heading": "## Never Existed", "body": "dropped"},
+        ],
+        "mistakes_new_entries": [],
+        "archive_entries": [],
+    })
+    e2e.append_user_line("trigger another distill")
+    memd_config(curator_cmd=[fake_curator(canned), "{model}"])
+    r = e2e.sync()
+
+    assert r.returncode == 0, r.stderr[-500:]
+    state = e2e.read_mem("state.md")
+    assert "applied anyway" in state
+    assert "dropped" not in state
+    assert "op skipped" in e2e.log_text()
+    # and the skip is on the record for the next curator to see
+    meta = memd.load_json(memd.META_PATH, {})[os.path.realpath(e2e.project)]
+    assert meta["history"][-1]["summary"].startswith("[1 op(s) skipped]")

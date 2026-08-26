@@ -164,6 +164,8 @@ def scaffold(path, name=None):
             write_memory_file(fpath, skeleton, name, ftype)
             created.append(fpath)
     return created
+
+
 def register(cfg, path, name=None):
     path = os.path.realpath(path)
     if path not in cfg["projects"]:
@@ -191,6 +193,8 @@ def find_project(cfg, cwd):
             if best is None or len(p) > len(best):
                 best = p
     return best
+
+
 def read_memory(project_path):
     mem = os.path.join(project_path, ".memory")
     out = {}
@@ -202,6 +206,8 @@ def read_memory(project_path):
         else:
             out[fname] = ""
     return out
+
+
 def archive_path(project_path):
     return os.path.join(
         project_path, ".memory", "archive", dt.date.today().strftime("%Y-%m") + ".md"
@@ -609,10 +615,18 @@ def make_brief(cfg, project_path, max_chars=None, topic=None):
     if topic is None:
         # fixed (unbudgeted) parts around the content sections — the pre-budget
         # brief in full, so default output is a strict superset of it
-        meta = load_json(META_PATH, {}).get(project_path)
-        if meta:
-            head.append(f"Last memory distill: {meta['last_sync']} "
-                        f"({meta['trigger']}) — {meta['summary']}")
+        # A meta entry can hold only ingest-health keys, or only a journal of
+        # FAILED distills — a project whose very first distill failed has an
+        # entry with no last_sync at all. Reading those keys directly raised
+        # KeyError, which the hook's RuntimeError/OSError guard does not catch,
+        # so the session-start brief died on a traceback. Gate on the key.
+        meta = load_json(META_PATH, {}).get(project_path) or {}
+        if meta.get("last_sync"):
+            line = (f"Last memory distill: {meta['last_sync']} "
+                    f"({meta.get('trigger', '?')})")
+            if meta.get("summary"):
+                line += f" — {meta['summary']}"
+            head.append(line)
         state_p = os.path.join(mem, "state.md")
         if os.path.exists(state_p):
             fm, _ = split_frontmatter(open(state_p).read())

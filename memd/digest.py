@@ -53,6 +53,13 @@ SALIENT_INPUT_KEYS = ("command", "file_path", "path", "notebook_path",
                       "prompt")
 
 
+def fmt_chars(n):
+    """Char count for a size-aware placeholder: '18.2k' past a thousand, exact
+    below it. The count is what tells the curator a result was huge; four extra
+    digits of precision on 'huge' are noise."""
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
 def _salient_input(inp):
     if isinstance(inp, dict):
         bits = [str(inp[k]).strip()[:80] for k in SALIENT_INPUT_KEYS
@@ -126,7 +133,8 @@ def digest_jsonl(path, offset, sidechains=False):
                         # results are the bulk of any file-heavy session
                         if r.strip():
                             span.lines.append(
-                                sub + f"R: [{len(r)} ch] " + r[:120 if sub else 80].strip())
+                                sub + f"R: [{fmt_chars(len(r))} ch] "
+                                + r[:120 if sub else 80].strip())
         elif etype == "assistant" and isinstance(content, list):
             for b in content:
                 if not isinstance(b, dict):
@@ -434,6 +442,26 @@ _ROLE_RE = re.compile(
     re.IGNORECASE)
 
 
+# One pass reads at most this much of an arbitrary log. extra_sources points at
+# files memd knows nothing about, and reading a multi-gigabyte one whole to
+# digest it would be a memory fault of memd's own making. The remainder is not
+# lost: the cursor stops where the read stopped and the tail rides next sweep.
+TEXT_LOG_READ_CAP = 4_000_000
+
+# Floor for "this decoded blob is plausibly prose". Undecodable bytes surface as
+# U+FFFD and binary is dense with C0 controls, so both are counted against it.
+TEXT_PRINTABLE_FLOOR = 0.85
+
+
+def _mostly_text(s):
+    sample = s[:8192]
+    if not sample:
+        return False
+    bad = sum(1 for ch in sample
+              if ch == "\ufffd" or (ch < " " and ch not in "\t\n\r"))
+    return (len(sample) - bad) / len(sample) >= TEXT_PRINTABLE_FLOOR
+
+
 def digest_text_log(path, offset):
     """Digest an arbitrary text log from byte offset into heuristic turns.
 
@@ -441,12 +469,19 @@ def digest_text_log(path, offset):
     try:
         with open(path, "rb") as f:
             f.seek(offset)
-            raw = f.read()
+            raw = f.read(TEXT_LOG_READ_CAP)
             new_offset = f.tell()
     except OSError as e:
         log(f"digest error: {e}")
         return None, offset
     text = raw.decode("utf-8", "replace")
+    # The text fallback is deliberately undemanding, but "any bytes at all" is
+    # too undemanding: a glob that catches a database, an archive or an image
+    # would otherwise ship mojibake to the curator, burn the tokens, and advance
+    # the cursor as though something had been learned.
+    if raw and not _mostly_text(text):
+        log(f"skipped non-text source ({len(raw)} bytes read): {path}")
+        return None, new_offset
     span = Span(source="text-log", file=os.path.basename(path),
                 session_id=os.path.basename(path)[:12], approx=True)
     try:

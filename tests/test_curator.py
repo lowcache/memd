@@ -275,6 +275,45 @@ def test_validate_shrink_guard_archive_compensates_on_set_body(memd):
     assert len(out["ops"]) == 1
 
 
+def test_validate_shrink_guard_covers_cumulative_section_ops(memd):
+    """Deleting every heading empties a file just as thoroughly as a bad
+    set_body; each op looks harmless on its own, so the guard has to see the
+    result of applying them all."""
+    body = "# System State\n\n## A\n\n" + "x" * 600 + "\n\n## B\n\n" + "y" * 600 + "\n"
+    memory = {"state.md": body, "decisions.md": "", "todo.md": "",
+              "mistakes.md": ""}
+    with pytest.raises(memd.CuratorError,
+                       match="shrink guard.*state\\.md section ops"):
+        memd.validate({"ops": [
+            {"op": "delete_section", "file": "state.md", "heading": "## A"},
+            {"op": "delete_section", "file": "state.md", "heading": "## B"}]},
+            memory)
+
+
+def test_validate_section_ops_archive_compensates(memd):
+    body = "# System State\n\n## A\n\n" + "x" * 1200 + "\n"
+    memory = {"state.md": body, "decisions.md": "", "todo.md": "",
+              "mistakes.md": ""}
+    out = memd.validate(
+        {"ops": [{"op": "delete_section", "file": "state.md",
+                  "heading": "## A"}],
+         "archive_entries": [{"source": "state.md", "content": "x" * 1200}]},
+        memory)
+    assert len(out["ops"]) == 1
+
+
+def test_validate_allows_honest_section_edits(memd):
+    """The guard must not fire on ordinary curation: rewriting a section
+    shorter is the job."""
+    body = "# System State\n\n## A\n\n" + "x" * 1200 + "\n"
+    memory = {"state.md": body, "decisions.md": "", "todo.md": "",
+              "mistakes.md": ""}
+    out = memd.validate({"ops": [{"op": "replace_section", "file": "state.md",
+                                  "heading": "## A", "body": "y" * 700}]},
+                        memory)
+    assert len(out["ops"]) == 1
+
+
 def test_validate_legacy_shrink_guard_names_the_key(memd):
     memory = {"state.md": "", "decisions.md": "D" * 2000, "todo.md": "",
               "mistakes.md": ""}
@@ -368,21 +407,48 @@ def test_apply_ops_append_normalizes_missing_prefix(memd):
     assert out["p"].endswith("\n## Fresh\n\nb\n\n")
 
 
-def test_apply_ops_append_existing_heading_raises(memd):
-    with pytest.raises(memd.CuratorError,
-                       match="already exists.*## One.*replace_section"):
-        memd.curator.apply_ops(
-            [{"op": "append_section", "file": "s", "heading": "One",
-              "body": "x"}], {"s": CANON_BODY})
+def test_apply_ops_append_existing_heading_is_skipped(memd):
+    skipped = []
+    out = memd.curator.apply_ops(
+        [{"op": "append_section", "file": "s", "heading": "One", "body": "x"}],
+        {"s": CANON_BODY}, skipped=skipped)
+    assert out["s"] is None  # nothing applied -> file left alone
+    assert len(skipped) == 1
+    assert "already exists" in skipped[0] and "## One" in skipped[0]
 
 
 @pytest.mark.parametrize("kind", ["replace_section", "delete_section"])
-def test_apply_ops_missing_heading_raises_naming_file_and_heading(memd, kind):
-    with pytest.raises(memd.CuratorError,
-                       match=r"no section '## Nope' in s\b"):
-        memd.curator.apply_ops(
-            [{"op": kind, "file": "s", "heading": "## Nope", "body": "x"}],
-            {"s": CANON_BODY})
+def test_apply_ops_missing_heading_is_skipped_naming_file_and_heading(
+        memd, kind):
+    skipped = []
+    out = memd.curator.apply_ops(
+        [{"op": kind, "file": "s", "heading": "## Nope", "body": "x"}],
+        {"s": CANON_BODY}, skipped=skipped)
+    assert out["s"] is None
+    assert skipped == [f"{kind}: no section '## Nope' in s"]
+
+
+def test_apply_ops_skips_only_the_bad_op(memd):
+    """One invented heading must not cost the ops that did resolve — that was
+    a whole distill discarded, and the same digest replayed into the same
+    model next sweep."""
+    skipped = []
+    out = memd.curator.apply_ops(
+        [{"op": "replace_section", "file": "s", "heading": "## One",
+          "body": "kept"},
+         {"op": "replace_section", "file": "s", "heading": "## Invented",
+          "body": "lost"}],
+        {"s": CANON_BODY}, skipped=skipped)
+    assert "kept" in out["s"]
+    assert "lost" not in out["s"]
+    assert len(skipped) == 1
+
+
+def test_apply_ops_skipped_list_is_optional(memd):
+    out = memd.curator.apply_ops(
+        [{"op": "delete_section", "file": "s", "heading": "## Nope"}],
+        {"s": CANON_BODY})
+    assert out["s"] is None
 
 
 def test_apply_ops_set_body_replaces_wholesale(memd):

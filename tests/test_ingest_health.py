@@ -149,3 +149,44 @@ def test_stall_clears_once_parsing_works_again(memd, env, memd_config,
 
     assert memd.sync_project(memd.load_config(), root) is True
     assert "ingest_stalled_bytes" not in memd.load_json(memd.META_PATH, {})[root]
+
+
+def test_stall_is_reported_even_with_an_inbox_note(memd, env, memd_config,
+                                                   fake_curator):
+    """An inbox note is a separate input and cannot vouch for a transcript
+    source. Gating the signal on `not spans and not inbox_notes` hid the stall
+    in exactly the projects someone was actively leaving notes in."""
+    canned = json.dumps({
+        "summary": "note only", "ops": [], "mistakes_new_entries": [],
+        "archive_entries": [],
+    })
+    memd_config(curator_cmd=[fake_curator(canned), "{model}"],
+                git_commit=False, auto_scaffold=False)
+    root, _ = _project_with_transcript(memd, env, "noted", _drift_body("n"))
+    memd.inbox.write_inbox_note(root, "remember this", source="test")
+
+    # the distill runs (there is a note to curate) but ingestion still stalled
+    assert memd.sync_project(memd.load_config(), root) is True
+
+    meta = memd.load_json(memd.META_PATH, {})[root]
+    assert meta["ingest_stalled_bytes"] >= memd.INGEST_STALL_BYTES
+
+
+def test_binary_source_is_skipped_not_digested(memd, env, memd_config):
+    """The text fallback must not treat a database, archive or image as prose:
+    mojibake in the prompt costs tokens and advances the cursor as though
+    something had been learned."""
+    memd_config(git_commit=False, auto_scaffold=False)
+    root = str(env.tmp / "binproj")
+    memd.scaffold(root, "binproj")
+    src = os.path.join(root, "blob.log")
+    with open(src, "wb") as f:
+        f.write(b"\x00\xff" * 6000)
+    cfg = memd.load_config()
+    cfg["projects"][root] = {"name": "binproj", "extra_sources": [src]}
+    memd.save_config(cfg)
+
+    assert memd.sync_project(memd.load_config(), root) is None
+
+    meta = memd.load_json(memd.META_PATH, {})[root]
+    assert meta["ingest_stalled_bytes"] >= memd.INGEST_STALL_BYTES

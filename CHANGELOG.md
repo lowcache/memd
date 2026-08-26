@@ -8,6 +8,52 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-26
+
+Hardening pass over the 0.4.0 section-op path: the guards that protected the
+full-body protocol did not follow the ops that replaced it. Every fix below is
+against behaviour 0.4.0 shipped, and each carries a regression test.
+
+### Fixed
+
+- The session-start brief no longer dies on a project whose distills have only
+  failed. 0.4.0's journal writes a meta entry for a failed distill, and that
+  entry has no `last_sync`; the brief read the key directly, raising KeyError —
+  which the hook's RuntimeError/OSError guard does not catch, so a first
+  distill that failed (a missing curator backend, say) left every later session
+  in that project starting with no memory and a traceback
+- The shrink guard covers section ops, not just `set_body`. `delete_section` on
+  every heading reduced a file to its title while each op looked harmless
+  alone, and sync recorded the result as a successful distill. The guard now
+  runs against what the ops actually produce, so it applies to both protocols
+- One invented heading no longer discards a whole distill. `replace_section` or
+  `delete_section` naming a heading that does not exist is dropped on its own
+  and reported; sibling ops apply as normal. Previously it raised, failing the
+  distill, holding the cursors, and replaying the identical digest into the
+  identical model on the next sweep — a curator that hallucinated one heading
+  reliably could stall a project indefinitely. Skips are logged and counted in
+  the distill journal, so the pattern is visible across passes
+- Ingestion health is decided by transcript parsing alone. Recording it only
+  when there was also no inbox note meant a single note from the user vouched
+  for sources that had yielded nothing, hiding the stall in exactly the
+  projects someone was actively working in
+- The stall byte count no longer sums antigravity step indices with file byte
+  offsets, a number that meant nothing against a byte threshold
+
+### Changed
+
+- The text fallback requires text: a source that decodes mostly to replacement
+  characters and control bytes (a database, an archive, an image caught by an
+  `extra_sources` glob) is skipped with a log line instead of being shipped to
+  the curator as mojibake and marked as learned
+- An arbitrary log is read at most 4 MB per pass rather than whole; the
+  remainder rides the next sweep
+- Tool-result placeholders read `R: [18.2k ch]` past a thousand characters, as
+  the 0.4.0 notes described; the code was emitting the raw count
+- The charter's output schema no longer lists `mistakes.md` as an op target.
+  It contradicted the rule three lines above it and invited the exact op the
+  validator then rejected outright
+
 ## [0.4.0] - 2026-08-26
 
 Token economics, timeline honesty, and tool independence: distills cost

@@ -275,3 +275,40 @@ def test_digest_source_dispatch(memd, env):
     lg.write_text("assistant: text-log path\n")
     span2, _ = memd.digest_source(cfg, str(lg), 0)
     assert span2.source == "text-log"
+
+
+def test_fmt_chars_is_size_aware(memd):
+    assert memd.digest.fmt_chars(11) == "11"
+    assert memd.digest.fmt_chars(999) == "999"
+    assert memd.digest.fmt_chars(18234) == "18.2k"
+
+
+def test_text_log_rejects_binary_and_advances_the_cursor(memd, env):
+    """Non-text bytes are consumed, not digested: no mojibake in the prompt,
+    and the source is not re-read every sweep. The bytes still count as
+    scanned, so `memd status` can report the source as unusable."""
+    blob = env.tmp / "blob.log"
+    blob.write_bytes(b"\x00\xff" * 500)
+    span, off = memd.digest.digest_text_log(str(blob), 0)
+    assert span is None
+    assert off == 1000
+
+
+def test_text_log_keeps_ordinary_prose_with_accents(memd, env):
+    """The printable floor must not reject legitimate UTF-8."""
+    lg = env.tmp / "utf8.log"
+    lg.write_text("user: café, naïve, 日本語 — still prose\n")
+    span, _ = memd.digest.digest_text_log(str(lg), 0)
+    assert span is not None
+    assert span.lines == ["U: café, naïve, 日本語 — still prose"]
+
+
+def test_text_log_read_is_capped(memd, env, monkeypatch):
+    """An arbitrary log is not read whole into memory; the tail rides the
+    next sweep instead."""
+    monkeypatch.setattr(memd.digest, "TEXT_LOG_READ_CAP", 64)
+    lg = env.tmp / "big.log"
+    lg.write_text("user: " + "a" * 500 + "\n")
+    span, off = memd.digest.digest_text_log(str(lg), 0)
+    assert off == 64
+    assert span is not None and len(span.lines) == 1

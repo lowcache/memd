@@ -245,6 +245,29 @@ def test_memory_manifest_sheds_before_content_under_max_chars(memd, project,
 # --------------------------------------------------------------------------
 
 
+def test_brief_survives_meta_without_last_sync(memd, env, project, cfg):
+    """A project whose only distills FAILED has a meta entry holding just the
+    journal. Reading last_sync/trigger/summary off it raised KeyError, which
+    the session-start hook's RuntimeError/OSError guard does not catch — the
+    brief died on a traceback and the session started with no memory at all."""
+    write_mem(memd, project, "state.md", "# System State\n\n## Zone\nfact.")
+    memd.save_json(memd.META_PATH, {os.path.realpath(project): {
+        "history": [{"ts": "2026-08-26T09:00:00", "trigger": "sweep",
+                     "model": "", "outcome": "fail", "summary": "backend gone"}]}})
+
+    brief = memd.make_brief(cfg, project)
+
+    assert "## Zone\nfact." in brief
+    assert "Last memory distill" not in brief
+
+
+def test_brief_omits_dangling_summary_when_meta_has_none(memd, project, cfg):
+    memd.save_json(memd.META_PATH, {os.path.realpath(project): {
+        "last_sync": "2026-08-26 09:00", "trigger": "sweep"}})
+    assert "Last memory distill: 2026-08-26 09:00 (sweep)" in memd.make_brief(
+        cfg, project)
+
+
 def test_superset_of_pre_budget_brief(memd, env, project, cfg):
     write_mem(memd, project, "state.md", "# System State\n\n## Zone\nfact.")
     write_mem(memd, project, "todo.md",

@@ -46,6 +46,7 @@ def _journal(project_path, trigger, model=None, digest_chars=0, outcome="ok",
         del hist[:-JOURNAL_CAP]
     update_json(META_PATH, _mutate)
 
+
 def project_lock(path):
     os.makedirs(LOCK_DIR, exist_ok=True)
     h = hashlib.sha256(path.encode()).hexdigest()[:16]
@@ -170,15 +171,24 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
         inbox_notes, inbox_paths = collect_inbox(project_path)
 
         # Bytes we read past the cursor this pass. Non-zero with no digest means
-        # the sources hold content memd could not recognise.
-        scanned = sum(off - cursors.get(src, 0) for src, off in new_cursors.items())
+        # the sources hold content memd could not recognise. Byte-cursor sources
+        # only: an antigravity cursor is a step index, and summing indices with
+        # byte offsets produced a number that meant nothing against a byte
+        # threshold. CEILING: antigravity stalls are therefore invisible; they
+        # need their own row-count signal.
+        scanned = sum(off - cursors.get(src, 0)
+                      for src, off in new_cursors.items()
+                      if not src.endswith(".db"))
 
+        # Ingestion health is a statement about transcript PARSING, so it is
+        # decided by the spans alone. Gating it on inbox_notes too meant one
+        # note from the user vouched for sources that yielded nothing, hiding
+        # the stall in exactly the projects someone was actively working in.
+        record_ingest_health(project_path, 0 if spans else scanned)
         if not spans and not inbox_notes:
-            record_ingest_health(project_path, scanned)
             log(f"sync {project_path}: nothing new ({trigger})"
                 + (f" [{scanned} unread bytes yielded nothing]" if scanned else ""))
             return None
-        record_ingest_health(project_path, 0)
 
         # Chronological assembly: order spans across ALL sources by their own
         # timestamps (filename order is meaningless), then budget-triage whole
@@ -226,8 +236,13 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
         result = validate(call_curator(cfg, prompt, model), memory)
 
         mem = os.path.join(project_path, ".memory")
-        for fname, new_body in apply_ops(result.get("ops", []),
-                                         {f: memory[f] for f in MEMORY_FILES}).items():
+        skipped = []
+        applied = apply_ops(result.get("ops", []),
+                            {f: memory[f] for f in MEMORY_FILES},
+                            skipped=skipped)
+        for reason in skipped:
+            log(f"op skipped {project_path}: {reason}")
+        for fname, new_body in applied.items():
             if new_body is None or not new_body.strip() or new_body == memory[fname]:
                 continue
             if fname == "mistakes.md":
@@ -262,8 +277,13 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
                 pass
 
         summary = str(result.get("summary", ""))[:300]
+        # The journal carries the skip count (a curator inventing headings every
+        # pass is a pattern only visible across distills); meta's user-facing
+        # summary stays the curator's own sentence.
         _journal(project_path, trigger, model=model, digest_chars=len(digest),
-                 outcome="ok", summary=summary,
+                 outcome="ok",
+                 summary=(f"[{len(skipped)} op(s) skipped] {summary}"
+                          if skipped else summary),
                  extra={
                      "last_sync": dt.datetime.now().isoformat(timespec="seconds"),
                      "trigger": trigger,
