@@ -53,6 +53,13 @@ against behaviour 0.4.0 shipped, and each carries a regression test.
 - The charter's output schema no longer lists `mistakes.md` as an op target.
   It contradicted the rule three lines above it and invited the exact op the
   validator then rejected outright
+- The release script takes its PyPI token from `TWINE_API_KEY`, or from the
+  file named by `TWINE_API_KEY_FILE` (default `/run/secrets/twine_api_key`),
+  and maps it onto the `__token__` username twine expects of an API token.
+  twine reads only `TWINE_USERNAME`/`TWINE_PASSWORD`, so a token supplied under
+  any other name — or, as secret managers deliver it, as a file — reached the
+  upload step as no credential at all and fell through to an interactive
+  prompt: under `--yes`, a release that fails at its last, irreversible step
 
 ## [0.4.0] - 2026-08-26
 

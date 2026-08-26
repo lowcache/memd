@@ -5,6 +5,9 @@
 #   ./scripts/release.sh --release    # gates, then push + tag + upload, each confirmed
 #   ./scripts/release.sh --release --yes   # same, no prompts (CI / you are sure)
 #
+# Upload credentials: TWINE_API_KEY (mapped to twine's __token__ user for you),
+# TWINE_PASSWORD, or ~/.pypirc. Without one, twine prompts.
+#
 # The gates exist because a PyPI version cannot be replaced and a pushed tag is
 # public immediately. Everything before RELEASE STEPS is read-only.
 set -euo pipefail
@@ -20,7 +23,7 @@ for arg in "$@"; do
     --release)      DO_RELEASE=1 ;;
     --yes|-y)       ASSUME_YES=1 ;;
     --allow-branch) ALLOW_BRANCH=1 ;;
-    --help|-h)      sed -n '2,9p' "$0"; exit 0 ;;
+    --help|-h)      sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -271,10 +274,39 @@ rm -rf "$smoke"
 
 # ---------------------------------------------------------------- credentials
 step "Upload credentials"
-if [ -n "${TWINE_PASSWORD:-}" ] || [ -f "$HOME/.pypirc" ]; then
-  ok "PyPI credentials present (~/.pypirc or TWINE_PASSWORD)"
+# sops-nix, systemd LoadCredential, Docker and Kubernetes secrets all deliver a
+# secret as a FILE, not an environment variable. Read one when the variable is
+# absent. `read` returns non-zero on a final line with no newline — which is
+# exactly how a secret file is usually written — so the `|| true` is load
+# bearing under `set -e`; without it a present, valid token aborts the script.
+: "${TWINE_API_KEY_FILE:=/run/secrets/twine_api_key}"
+if [ -z "${TWINE_API_KEY:-}" ] && [ -r "$TWINE_API_KEY_FILE" ]; then
+  IFS= read -r TWINE_API_KEY <"$TWINE_API_KEY_FILE" || true
+  TWINE_API_KEY=${TWINE_API_KEY%$'\r'}   # CRLF file: \r would be sent verbatim
+  export TWINE_API_KEY
+  [ -n "$TWINE_API_KEY" ] && ok "read PyPI token from $TWINE_API_KEY_FILE" \
+                          || warn "$TWINE_API_KEY_FILE is empty"
+fi
+# twine reads TWINE_USERNAME/TWINE_PASSWORD and nothing else from the
+# environment; a PyPI API token authenticates as the literal username
+# "__token__" with the token itself as the password. TWINE_API_KEY is where
+# this project's sops-managed secret lands, and twine has never heard of that
+# name — an unmapped key means twine falls through to an interactive prompt,
+# which under --yes is a release that hangs or fails at the last step.
+if [ -n "${TWINE_API_KEY:-}" ] && [ -z "${TWINE_PASSWORD:-}" ]; then
+  export TWINE_USERNAME="${TWINE_USERNAME:-__token__}"
+  export TWINE_PASSWORD="$TWINE_API_KEY"
+  case "$TWINE_PASSWORD" in
+    pypi-*) ok "TWINE_API_KEY mapped to twine (username: $TWINE_USERNAME)" ;;
+    *)      warn "TWINE_API_KEY does not start with 'pypi-'; PyPI API tokens do — expect a 403" ;;
+  esac
+fi
+if [ -n "${TWINE_PASSWORD:-}" ]; then
+  ok "PyPI credentials present in the environment"
+elif [ -f "$HOME/.pypirc" ]; then
+  ok "PyPI credentials present (~/.pypirc)"
 else
-  warn "no ~/.pypirc or TWINE_PASSWORD; twine will prompt for a token"
+  warn "no TWINE_API_KEY/TWINE_PASSWORD and no ~/.pypirc; twine will prompt for a token"
 fi
 
 # ---------------------------------------------------------------- verdict
