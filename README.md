@@ -28,7 +28,7 @@ Every AI coding session ends the same way: the context window fills up, the sess
 
 ## How It Works
 
-Sessions end (or a timer fires), memd collects whatever is new — transcripts, databases, inbox notes — scrubs it for secrets, and hands it to a small "curator" model that rewrites the memory files. Python code, not the model, gets the final say on what's allowed to change.
+Sessions end (or a timer fires), memd collects whatever is new — transcripts, databases, inbox notes — scrubs it for secrets, and hands it to a small "curator" model that applies surgical section-level updates to the memory files. Python code, not the model, gets the final say on what's allowed to change.
 
 ```mermaid
 graph TD
@@ -97,7 +97,7 @@ For two conventions memd doesn't write — GitHub Copilot's `.github/copilot-ins
 
 The core of memd doesn't care which agent or model you use: the memory files are plain markdown, the inbox accepts notes from anything that can write a file, `memd brief` prints to stdout for any tool to consume, and the `curator_cmd` config key lets any LLM command do the distilling. The parts that are currently tool-specific:
 
-*   **Automatic transcript ingestion** understands `claude-code` session logs and `antigravity-cli` databases. Other agents' transcripts can be wired in per-project via `extra_sources` (plain text / JSONL), or their facts routed through the inbox — there is no built-in parser for them yet.
+*   **Automatic transcript ingestion** understands `claude-code` session logs and `antigravity-cli` databases natively, and digests *any other* CLI's session logs via content sniffing and a best-effort text fallback (common `user:`/`assistant:` markers become turns) — point `extra_sources` at whatever a tool writes, or route facts through the inbox instead.
 *   **Lifecycle hooks** (`memd install-hooks`, session-start brief injection) exist only for `claude-code`. Every other tool relies on the periodic sweep timer instead: slower cadence, same result.
 *   **The default curator is the `claude` CLI**, and the default `model_small`/`model_large` names (both `sonnet`) assume it. Set `curator_cmd` to distill with a local model, another vendor's CLI, or anything else — [`contrib/curators/`](contrib/curators/) has ready-made wrappers and the backend contract, so you can run memd with no Anthropic dependency at all.
 
@@ -155,7 +155,7 @@ For complete writer/reader guidelines, see [INBOX-PROTOCOL.md](INBOX-PROTOCOL.md
 
 Distilling means sending session content to an LLM, so it's worth being precise about what goes where and what it costs.
 
-**What gets sent.** Whatever is new in your transcripts since the last run, capped at `digest_cap_chars` (60,000 by default), plus the current contents of the four memory files. Credentials are scrubbed first — 13 patterns, [detailed below](#built-in-credential-redaction) — but that's shape-matching, not a guarantee.
+**What gets sent.** Whatever is new in your transcripts since the last run — as chronologically ordered, timestamped session spans — capped at `digest_cap_chars` (60,000 by default), plus the current memory files (`mistakes.md` only as a heading index; it is append-only). Credentials are scrubbed first — 13 patterns, [detailed below](#built-in-credential-redaction) — but that's shape-matching, not a guarantee.
 
 **Where it goes.** To whatever `curator_cmd` points at. Out of the box that's the `claude` CLI, which means your session content reaches Anthropic's API. Point it at a local model and nothing leaves the machine; [`contrib/curators/`](contrib/curators/) has a verified ollama wrapper and the backend contract. `memd status` always prints the backend in use, so you never have to infer it:
 
@@ -170,7 +170,7 @@ Both default to `sonnet`, which is a deliberate choice: curation quality *is* th
 
 **What memd never does.** No network calls of its own, no telemetry, no phone-home. It reads session transcripts, inbox notes, and any `extra_sources` you configure — not your source code. It never executes anything from a transcript or from curator output. See [SECURITY.md](SECURITY.md).
 
-**When ingestion breaks, it says so.** memd reads formats that belong to other tools — `claude-code`'s session logs, `antigravity-cli`'s databases — and those can change without notice. Parsing is deliberately forgiving, so a change doesn't crash anything; the risk is the opposite one, that memd keeps running and quietly stops learning. So it watches for exactly that: session content read, nothing usable extracted. `memd status` reports it instead of leaving you to notice months later that memory went stale.
+**When ingestion breaks, it says so.** memd reads formats that belong to other tools — `claude-code`'s session logs, `antigravity-cli`'s databases — and those can change without notice. Parsing is deliberately forgiving, so a change doesn't crash anything; unknown third-party formats simply degrade to the text fallback and keep working. The surviving blindspot is claude-shaped JSONL whose entries stop yielding lines: session content read, nothing usable extracted. `memd status` reports exactly that instead of leaving you to notice months later that memory went stale.
 
 ```
 ! ingestion  : 9720 bytes read since 2026-07-30T06:11:27, nothing usable extracted.
@@ -181,7 +181,7 @@ Both default to `sonnet`, which is a deliberate choice: curation quality *is* th
 Nothing is lost when this happens: read cursors only advance after a successful distill, so the unread content simply replays once parsing works again.
 
 ### 4. Extra Custom Sources
-Additional text transcript sources (e.g. custom JSONL logs) can be registered per-project under the `projects.<path>.extra_sources` array in `config.json`.
+Additional transcript sources (any text or JSONL log another CLI writes — role tags like `user:`/`assistant:` are detected heuristically) can be registered per-project under the `projects.<path>.extra_sources` array in `config.json`.
 
 ---
 
@@ -199,7 +199,8 @@ Configuration is stored in `$XDG_CONFIG_HOME/memd/config.json` (defaults to `~/.
 | `model_small` | `string` | `"sonnet"` | Model used for routine distills. Set to `"haiku"` to cut cost. |
 | `model_large` | `string` | `"sonnet"` | Model used once a digest exceeds `escalate_chars`. |
 | `escalate_chars` | `integer` | `15000` | Digest size above which `model_large` is used, whatever triggered the distill. |
-| `digest_cap_chars` | `integer` | `60000` | Maximum length of transcript digest fed to the LLM. |
+| `digest_cap_chars` | `integer` | `60000` | Maximum length of transcript digest fed to the LLM. Oversize digests drop whole low-signal sessions (named in an omission marker) rather than truncating mid-story. |
+| `capture_sidechains` | `boolean` | `true` | Include subagent ("sidechain") work from transcripts as indented secondary-signal lines. |
 | `quiet_seconds` | `integer` | `600` | Skip digesting transcripts modified within this cooldown period. |
 | `sweep_jobs` | `integer` | `4` | Number of worker threads for parallel sweeps. |
 | `auto_scaffold` | `boolean` | `true` | Auto-create `.memory/` structure inside detected git repositories. |
