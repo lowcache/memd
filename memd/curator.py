@@ -162,8 +162,7 @@ def build_prompt(cfg, project_path, name, memory, digest, inbox_notes,
                  recent_distills=None):
     budgets = cfg["budgets"]
     parts = [
-        CHARTER,
-        f"\nPROJECT: {name}  (root: {project_path})",
+        f"PROJECT: {name}  (root: {project_path})",
         f"DATE: {today()}",
         "BUDGETS (chars of body): "
         + ", ".join(f"{k}={v}" for k, v in budgets.items()),
@@ -193,24 +192,56 @@ def build_prompt(cfg, project_path, name, memory, digest, inbox_notes,
 CURATOR_RETRY_DELAYS = (5, 15)
 
 
-def call_curator(cfg, prompt, model):
+# Curator calls are single-shot completions: no tools, MCP servers, user
+# settings (hooks, plugins, CLAUDE.md) or skills, and no saved transcript.
+LEAN_CLAUDE_FLAGS = ["--tools", "", "--strict-mcp-config", "--setting-sources", "",
+                     "--disable-slash-commands", "--no-session-persistence"]
+
+
+def _add_usage(acc, envelope):
+    """Accumulate a claude -p envelope's token/cost figures into acc (retries
+    cost real tokens too, so attempts sum)."""
+    if acc is None or not isinstance(envelope, dict):
+        return
+    u = envelope.get("usage")
+    if not isinstance(u, dict):
+        return
+
+    def num(v):
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
+
+    acc["input_tokens"] = acc.get("input_tokens", 0) + int(
+        num(u.get("input_tokens")) + num(u.get("cache_creation_input_tokens"))
+        + num(u.get("cache_read_input_tokens")))
+    acc["cache_read_tokens"] = acc.get("cache_read_tokens", 0) + int(
+        num(u.get("cache_read_input_tokens")))
+    acc["output_tokens"] = acc.get("output_tokens", 0) + int(
+        num(u.get("output_tokens")))
+    acc["cost_usd"] = round(acc.get("cost_usd", 0.0)
+                            + float(num(envelope.get("total_cost_usd"))), 6)
+
+
+def call_curator(cfg, prompt, model, usage=None):
     """Invoke the curator, retrying transient failures (timeout, nonzero
     exit, unparseable output) with backoff. A missing backend raises
-    ConfigError and fails fast — retrying cannot install it."""
+    ConfigError and fails fast — retrying cannot install it.
+    usage, when a dict, accumulates token/cost figures across attempts."""
     for attempt, delay in enumerate(CURATOR_RETRY_DELAYS, start=1):
         try:
-            return _call_curator_once(cfg, prompt, model)
+            return _call_curator_once(cfg, prompt, model, usage)
         except CuratorError as e:
             log(f"curator attempt {attempt}/{len(CURATOR_RETRY_DELAYS) + 1} "
                 f"failed, retrying in {delay}s: {e}")
             time.sleep(delay)
-    return _call_curator_once(cfg, prompt, model)
+    return _call_curator_once(cfg, prompt, model, usage)
 
 
-def _call_curator_once(cfg, prompt, model):
+def _call_curator_once(cfg, prompt, model, usage=None):
     cmd = cfg.get("curator_cmd") or []
+    custom = bool(cmd)
     if cmd:
         cmd = [arg.replace("{model}", model) for arg in cmd]
+        stdin = CHARTER + "\n\n" + prompt
     else:
         bin_ = cfg["claude_bin"]
         if not shutil.which(bin_):
@@ -218,15 +249,26 @@ def _call_curator_once(cfg, prompt, model):
                 if os.path.exists(cand):
                     bin_ = cand
                     break
-        cmd = [bin_, "-p", "--model", model, "--output-format", "json", "--max-turns", "1"]
+        base = [bin_, "-p", "--model", model, "--output-format", "json", "--max-turns", "1"]
+        cmd = base + ["--system-prompt", CHARTER] + LEAN_CLAUDE_FLAGS
+        stdin = prompt
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)  # allow nested invocation from inside a session
     os.makedirs(STATE_DIR, exist_ok=True)
-    try:
-        proc = subprocess.run(
-            cmd, input=prompt, capture_output=True, text=True,
+
+    def run(cmd, stdin):
+        return subprocess.run(
+            cmd, input=stdin, capture_output=True, text=True,
             timeout=600, cwd=STATE_DIR, env=env,
         )
+
+    try:
+        proc = run(cmd, stdin)
+        if not custom and proc.returncode != 0 and "unknown option" in proc.stderr:
+            log(f"claude rejected lean curator flags "
+                f"({proc.stderr.strip()[:200]}); retrying with full session context")
+            cmd = base
+            proc = run(cmd, CHARTER + "\n\n" + prompt)
     except subprocess.TimeoutExpired:
         raise CuratorError("curator call timed out")
     except FileNotFoundError:
@@ -246,6 +288,7 @@ def _call_curator_once(cfg, prompt, model):
     except json.JSONDecodeError:
         text = proc.stdout
     else:
+        _add_usage(usage, envelope)
         if isinstance(envelope, dict) and isinstance(envelope.get("result"), str):
             text = envelope["result"]
         elif isinstance(envelope, dict):

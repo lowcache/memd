@@ -164,7 +164,7 @@ $ memd status
 curator      : claude (headless)  [models: sonnet/sonnet]  — sends session content to the Anthropic API
 ```
 
-**What it costs.** A distill runs when a session ends, and the sweep timer checks every 30 minutes for projects with new content. Most sweeps do nothing — a project is skipped unless it has unread transcript content or an inbox note, and transcripts touched in the last `quiet_seconds` (10 minutes) are left alone so an active session isn't digested mid-flight. When a distill does run it's one call, on `model_small` unless the digest exceeds `escalate_chars` (15,000), which promotes it to `model_large`.
+**What it costs.** A distill runs when a session ends, and the sweep timer checks every 30 minutes for projects with new content. Most sweeps do nothing — a project is skipped unless it has unread transcript content or an inbox note, and transcripts touched in the last `quiet_seconds` (10 minutes) are left alone so an active session isn't digested mid-flight. When a distill does run it's one call, on `model_small` unless the digest exceeds `escalate_chars` (15,000), which promotes it to `model_large`. Digests under `min_digest_chars` (3,000) wait until more content arrives or the oldest of it is a day old, and the default `claude` call runs without tools, MCP servers, plugins or your CLAUDE.md, so you pay for memd's prompt and nothing else. `memd status` shows what distills have cost.
 
 Both default to `sonnet`, which is a deliberate choice: curation quality *is* the product, and a weak default model is indistinguishable from a weak tool to anyone trying memd for the first time. It costs more than the cheapest option. To spend less, set `model_small` to `haiku` — routine distills drop to it while large backlogs still escalate. To spend nothing, use a local backend.
 
@@ -200,6 +200,8 @@ Configuration is stored in `$XDG_CONFIG_HOME/memd/config.json` (defaults to `~/.
 | `model_large` | `string` | `"sonnet"` | Model used once a digest exceeds `escalate_chars`. |
 | `escalate_chars` | `integer` | `15000` | Digest size above which `model_large` is used, whatever triggered the distill. |
 | `digest_cap_chars` | `integer` | `60000` | Maximum length of transcript digest fed to the LLM. Oversize digests drop whole low-signal sessions (named in an omission marker) rather than truncating mid-story. |
+| `min_digest_chars` | `integer` | `3000` | Sweep, session-end and pre-compact digests smaller than this (with no inbox notes) are deferred until more content arrives. `0` distills every time. |
+| `max_defer_hours` | `integer` | `24` | A deferred digest distills anyway once its oldest session span is this old. |
 | `capture_sidechains` | `boolean` | `true` | Include subagent ("sidechain") work from transcripts as indented secondary-signal lines. |
 | `quiet_seconds` | `integer` | `600` | Skip digesting transcripts modified within this cooldown period. |
 | `sweep_jobs` | `integer` | `4` | Number of worker threads for parallel sweeps. |

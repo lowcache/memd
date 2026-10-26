@@ -62,6 +62,12 @@ def cmd_status(cfg):
             mark = "!" if outcome == "fail" else " "
             print(f"  {mark} {h.get('ts', '?')} [{h.get('trigger', '?')}/"
                   f"{h.get('model', '?')}] {str(h.get('summary', ''))[:90]}")
+        spent = [h["usage"] for h in hist if isinstance(h.get("usage"), dict)]
+        if spent:
+            cost = sum(u.get("cost_usd") or 0 for u in spent)
+            toks = sum(u.get("input_tokens") or 0 for u in spent)
+            print(f"  curator cost : ${cost:.2f}, {toks} input tokens over "
+                  f"{len(spent)} logged distill(s)")
         print(f"  sources      : {len(srcs)} ({ag} antigravity), "
               f"{len(pending)} with pending content, {inbox} inbox note(s)")
         stalled = m.get("ingest_stalled_bytes")

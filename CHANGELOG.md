@@ -8,6 +8,30 @@ and this project adheres to
 
 ## [Unreleased]
 
+Distill cost pass: most of a curator call's tokens were overhead, not memory.
+
+### Changed
+
+- The default `claude` curator now runs as a bare completion: the charter goes
+  in `--system-prompt`, and tools, MCP servers, user settings (hooks, plugins,
+  CLAUDE.md), skills and session persistence are all switched off. A distill
+  previously inherited the full Claude Code session context — measured ~31k
+  input tokens per call before memd's own prompt — and saved a transcript of
+  every curator run. If the installed `claude` rejects the flags, memd logs it
+  and retries once with the old invocation.
+- Custom `curator_cmd` backends now receive the charter as a prefix on stdin;
+  `build_prompt()` no longer embeds it, so the content they get is unchanged.
+- Small digests wait for more content. A sweep, session-end or pre-compact
+  digest under `min_digest_chars` (3000) with no inbox notes is deferred until
+  its oldest span is `max_defer_hours` (24) old. Cursors don't move, so nothing
+  is lost; manual syncs and inbox notes are never deferred. `0` disables it.
+
+### Added
+
+- Per-distill token and cost figures (`usage`) in the distill journal, read
+  from the `claude -p` envelope and summed across retries; `memd status`
+  prints the total per project.
+
 ## [0.4.2] - 2026-08-26
 
 Hardening pass over the 0.4.0 section-op path: the guards that protected the

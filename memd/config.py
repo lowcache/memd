@@ -41,6 +41,10 @@ DEFAULT_CONFIG = {
     "model_large": "sonnet",
     "escalate_chars": 15000,        # digests above this go to model_large
     "digest_cap_chars": 60000,      # max transcript digest fed to the model
+    "min_digest_chars": 3000,       # sweep/session-end/pre-compact digests under
+                                    # this (no inbox notes) wait for more content;
+                                    # 0 = distill every time
+    "max_defer_hours": 24,          # ...unless their oldest span is this old
     # subagent (sidechain) turns ride along in digests as indented "  SUB> "
     # lines — delegated work reaches memory instead of vanishing
     "capture_sidechains": True,

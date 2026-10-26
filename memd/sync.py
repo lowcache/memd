@@ -27,7 +27,7 @@ JOURNAL_CAP = 100
 
 
 def _journal(project_path, trigger, model=None, digest_chars=0, outcome="ok",
-             summary="", extra=None):
+             summary="", extra=None, usage=None):
     """Append one distill event to the project's rolling journal (and merge any
     extra entry fields) under the state lock."""
     def _mutate(m):
@@ -43,6 +43,8 @@ def _journal(project_path, trigger, model=None, digest_chars=0, outcome="ok",
             "outcome": outcome,
             "summary": (summary or "")[:200],
         })
+        if usage:
+            hist[-1]["usage"] = usage
         del hist[:-JOURNAL_CAP]
     update_json(META_PATH, _mutate)
 
@@ -119,6 +121,25 @@ def transcript_files(cfg, project_path):
 INGEST_STALL_BYTES = 4096
 
 
+# Triggers whose small digests may wait for more content: transcripts stay on
+# disk and cursors don't move, so a deferred digest replays in full later.
+DEFERRABLE_TRIGGERS = ("sweep", "session-end", "pre-compact")
+
+
+def defer_expired(spans, max_hours):
+    """True when the oldest pending span is at least max_hours old, or when no
+    span carries a usable timestamp (unknowable age: never hold it)."""
+    starts = [s.start[:19] for s in spans if s.start]
+    if not starts:
+        return True
+    try:
+        oldest = dt.datetime.fromisoformat(min(starts))
+    except ValueError:
+        return True
+    now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    return now - oldest >= dt.timedelta(hours=max_hours)
+
+
 def record_ingest_health(project_path, stalled_bytes):
     """Track sources that carry unread content which yields nothing.
 
@@ -143,7 +164,8 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
     """Distill new session content into a project's memory.
 
     Returns True on a successful apply, None on a no-op (locked by another
-    sync, or nothing new to distill), False on a failed distill."""
+    sync, nothing new, or too little to distill yet), False on a failed
+    distill."""
     project_path = os.path.realpath(project_path)
     entry = cfg["projects"].get(project_path)
     name = entry["name"] if entry else os.path.basename(project_path)
@@ -155,6 +177,7 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
         log(f"sync skipped (locked): {project_path}")
         return None
 
+    usage = {}
     try:
         cursors = load_json(CURSORS_PATH, {})
         sources = [transcript] if transcript else transcript_files(cfg, project_path)
@@ -204,6 +227,16 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
             joined = cap_digest(joined, cfg["digest_cap_chars"])
         digest = redact(collapse_repeats(joined))
         inbox_notes = [redact(n) for n in inbox_notes]
+        if (trigger in DEFERRABLE_TRIGGERS and not inbox_notes
+                and len(digest) < cfg["min_digest_chars"]
+                and not defer_expired(spans, cfg["max_defer_hours"])):
+            # a distill's fixed cost (charter + all memory) dwarfs a tiny digest
+            log(f"sync {project_path}: deferred, {len(digest)}c digest < "
+                f"min_digest_chars ({trigger})")
+            if dry_run:
+                print(f"[dry-run] project={project_path} deferred: "
+                      f"digest={len(digest)} chars < min_digest_chars")
+            return None
         # Escalate on size alone, whatever triggered the distill. Restricting
         # this to session-end/manual meant a sweep never escalated — and a sweep
         # carries the biggest backlogs (days of unread transcripts, up to
@@ -233,7 +266,7 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
 
         log(f"distill start {project_path} trigger={trigger} model={model} "
             f"digest={len(digest)}c inbox={len(inbox_notes)}")
-        result = validate(call_curator(cfg, prompt, model), memory)
+        result = validate(call_curator(cfg, prompt, model, usage=usage), memory)
 
         mem = os.path.join(project_path, ".memory")
         skipped = []
@@ -281,7 +314,7 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
         # pass is a pattern only visible across distills); meta's user-facing
         # summary stays the curator's own sentence.
         _journal(project_path, trigger, model=model, digest_chars=len(digest),
-                 outcome="ok",
+                 outcome="ok", usage=usage or None,
                  summary=(f"[{len(skipped)} op(s) skipped] {summary}"
                           if skipped else summary),
                  extra={
@@ -303,7 +336,7 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
         log(f"distill FAILED {project_path} ({trigger}): {e}")
         try:
             _journal(project_path, trigger, outcome="fail",
-                     summary=str(e)[:200])
+                     summary=str(e)[:200], usage=usage or None)
         except (RuntimeError, OSError) as je:
             log(f"journal write failed: {je}")
         return False
