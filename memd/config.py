@@ -45,6 +45,9 @@ DEFAULT_CONFIG = {
                                     # this (no inbox notes) wait for more content;
                                     # 0 = distill every time
     "max_defer_hours": 24,          # ...unless their oldest span is this old
+    "curator_view_chars": 20000,    # state/decisions/todo bodies above this are shown
+                                    # to the curator as a partial view: every
+                                    # heading, bodies only where the digest is relevant
     # subagent (sidechain) turns ride along in digests as indented "  SUB> "
     # lines — delegated work reaches memory instead of vanishing
     "capture_sidechains": True,

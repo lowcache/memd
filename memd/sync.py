@@ -10,7 +10,7 @@ import re
 from memd.config import (CLAUDE_PROJECTS_DIR, CURSORS_PATH, LOCK_DIR,
                          MEMORY_FILES, META_PATH, load_json, log, update_json)
 from memd.curator import (apply_ops, build_prompt, call_curator,
-                          dedupe_mistakes, validate)
+                          dedupe_mistakes, select_view, validate)
 from memd.digest import (ag_max_idx, cap_digest, collapse_repeats, digest_source,
                          project_ag_dbs, redact, render_span, sort_spans,
                          truncate_spans)
@@ -246,6 +246,10 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
             model = cfg["model_large"]
 
         memory = read_memory(project_path)
+        view = select_view(cfg, memory, digest, inbox_notes)
+        if view is not None:
+            log(f"partial view {project_path}: "
+                f"{sum(len(v) for v in view.values())} section(s) shown")
         # What earlier distills already applied, oldest first: evidence for the
         # charter's do-not-reapply rule instead of leaving it to model faith.
         recent = [
@@ -255,7 +259,7 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
             if h.get("outcome") == "ok"
         ][-5:]
         prompt = build_prompt(cfg, project_path, name, memory, digest,
-                              inbox_notes, recent_distills=recent or None)
+                              inbox_notes, recent_distills=recent or None, view=view)
 
         if dry_run:
             print(f"[dry-run] project={project_path} trigger={trigger} model={model}")
@@ -266,7 +270,8 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
 
         log(f"distill start {project_path} trigger={trigger} model={model} "
             f"digest={len(digest)}c inbox={len(inbox_notes)}")
-        result = validate(call_curator(cfg, prompt, model, usage=usage), memory)
+        result = validate(call_curator(cfg, prompt, model, usage=usage), memory,
+                          view=view)
 
         mem = os.path.join(project_path, ".memory")
         skipped = []

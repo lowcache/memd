@@ -1,6 +1,7 @@
 """The distill brain: curator charter, prompt assembly, LLM invocation, and
 output validation."""
 
+import datetime as dt
 import json
 import os
 import re
@@ -10,7 +11,9 @@ import time
 
 from memd.config import CONFIG_PATH, HOME, STATE_DIR, log, today
 from memd.errors import ConfigError, CuratorError
-from memd.memory import SKELETONS, SECTION_RE, split_frontmatter
+from memd.memory import (SKELETONS, SECTION_RE, split_frontmatter,
+                         split_sections, section_date)
+from memd.recall import rank, terms_from_text
 
 # --------------------------------------------------------------------------
 # curator charter — the system contract for the distillation model
@@ -72,6 +75,17 @@ MECHANICS
 - If files exceed their budgets (given below), move the least-current
   sections into archive_entries rather than deleting them.
 - Multiple agents may have worked in parallel; merge their threads, dedupe.
+
+PARTIAL VIEW (large memories only)
+- A file marked PARTIAL VIEW lists every section heading but shows bodies
+  only for sections relevant to this digest; the others read
+  "[body not shown: N chars]".
+- replace_section/delete_section ONLY sections whose body is shown; ops on
+  hidden sections are discarded. set_body is not allowed on a partial file.
+- append_section works as usual: check the heading list first so you do not
+  duplicate a hidden section.
+- A shown section marked [oversized section: ...]: when you replace it, split
+  its content into several focused ### subsections inside the new body.
 
 DIGEST FORMAT (when present)
 - Session spans carry "--- session span | ... ---" headers with UTC times;
@@ -158,18 +172,78 @@ def _mistakes_block(body):
     return block
 
 
+def _partial_file(fname, body, shown):
+    preamble, sections = _split_sections_raw(body or "")
+    k = sum(heading in shown for heading, _ in sections)
+    header = (f"\n===== CURRENT {fname} (PARTIAL VIEW: {k} of {len(sections)} "
+              "sections shown in full; the rest are listed by heading only) =====")
+    rendered = []
+    for heading, section_body in sections:
+        if heading in shown:
+            marker = (f"\n[oversized section: {len(section_body)} chars — if you "
+                      "replace it, split it into focused ### subsections]"
+                      if len(section_body) > OVERSIZED_SECTION_CHARS else "")
+            rendered.append(heading + marker + "\n\n" + section_body.strip() + "\n")
+        else:
+            rendered.append(heading + "\n"
+                            + f"[body not shown: {len(section_body)} chars]\n")
+    return header + "\n" + (preamble + "\n".join(rendered) if body else "(empty)")
+
+
+# Partial curator view (large memory): every heading, relevant bodies only.
+VIEW_FILES = ("state.md", "decisions.md", "todo.md")
+OVERSIZED_SECTION_CHARS = 2500
+VIEW_RECENT_DAYS = 14
+
+
+def select_view(cfg, memory, digest, inbox_notes):
+    """None when state/decisions/todo fit curator_view_chars (full view); else
+    {file: set of headings whose bodies the curator is shown}."""
+    budget = cfg["curator_view_chars"]
+    if sum(len(memory.get(f) or "") for f in VIEW_FILES) <= budget:
+        return None
+    secs = [{"file": f, "heading": heading, "body": body}
+            for f in VIEW_FILES
+            for heading, body in split_sections(memory.get(f) or "")]
+    query = " ".join(terms_from_text(digest + "\n" + "\n".join(inbox_notes)))
+    candidates = [index for index, _ in rank(secs, query)]
+    listed = set(candidates)
+    cutoff = (dt.date.today() - dt.timedelta(days=VIEW_RECENT_DAYS)).isoformat()
+    recent = [(index, section_date(sec["heading"] + "\n" + sec["body"]))
+              for index, sec in enumerate(secs) if index not in listed]
+    candidates.extend(index for index, date in
+                      sorted((item for item in recent if item[1] and item[1] >= cutoff),
+                             key=lambda item: item[1], reverse=True))
+    view = {f: set() for f in VIEW_FILES}
+    used, taken = 0, False
+    for index in candidates:
+        sec = secs[index]
+        cost = len(sec["heading"]) + len(sec["body"])
+        if used + cost <= budget or not taken:
+            view[sec["file"]].add(sec["heading"])
+            used += cost
+            taken = True
+    return view
+
+
 def build_prompt(cfg, project_path, name, memory, digest, inbox_notes,
-                 recent_distills=None):
+                 recent_distills=None, view=None):
     budgets = cfg["budgets"]
     parts = [
         f"PROJECT: {name}  (root: {project_path})",
         f"DATE: {today()}",
         "BUDGETS (chars of body): "
         + ", ".join(f"{k}={v}" for k, v in budgets.items()),
-        "\n===== CURRENT state.md =====\n" + (memory["state.md"] or "(empty)"),
-        "\n===== CURRENT decisions.md =====\n" + (memory["decisions.md"] or "(empty)"),
+        (_partial_file("state.md", memory["state.md"], view["state.md"])
+         if view is not None else
+         "\n===== CURRENT state.md =====\n" + (memory["state.md"] or "(empty)")),
+        (_partial_file("decisions.md", memory["decisions.md"], view["decisions.md"])
+         if view is not None else
+         "\n===== CURRENT decisions.md =====\n" + (memory["decisions.md"] or "(empty)")),
         _mistakes_block(memory["mistakes.md"]),
-        "\n===== CURRENT todo.md =====\n" + (memory["todo.md"] or "(empty)"),
+        (_partial_file("todo.md", memory["todo.md"], view["todo.md"])
+         if view is not None else
+         "\n===== CURRENT todo.md =====\n" + (memory["todo.md"] or "(empty)")),
     ]
     if inbox_notes:
         parts.append("\n===== CURATOR INBOX =====\n" + "\n\n".join(inbox_notes))
@@ -355,7 +429,7 @@ def _strip_wrappers(text):
     return v2, v2 != stripped
 
 
-def validate(result, memory):
+def validate(result, memory, view=None):
     """Normalize and police curator output into the section-op protocol.
 
     Accepts both protocols during the transition:
@@ -384,6 +458,9 @@ def validate(result, memory):
             raise CuratorError(f"{key} is not a string")
         if not v.strip():
             continue  # legacy "" was a silent no-op downstream; preserve that
+        if view is not None and fname in view:
+            log(f"dropped {key}: set_body on a partial-view file")
+            continue
         items.append(({"op": "set_body", "file": fname, "body": v}, key))
 
     raw_ops = result.get("ops") or []
@@ -417,7 +494,21 @@ def validate(result, memory):
                 raise CuratorError(
                     f"ops[{i}] {kind}/{fname}: missing or non-string body")
             entry["body"] = body
-        items.append((entry, f"ops[{i}] {kind}/{fname}"))
+        label = f"ops[{i}] {kind}/{fname}"
+        if kind == "replace_section" and not entry["body"].strip():
+            # curators "retire" a section by emptying it; a bare heading left
+            # behind reads as a still-active entry
+            log(f"{label}: empty replace treated as delete_section")
+            kind = entry["op"] = "delete_section"
+            del entry["body"]
+        if view is not None and fname in view:
+            if kind == "set_body":
+                log(f"dropped {label}: set_body on a partial-view file")
+                continue
+            if kind in ("replace_section", "delete_section") and entry["heading"] not in view[fname]:
+                log(f"dropped {label}: section not shown in partial view")
+                continue
+        items.append((entry, label))
 
     ops = []
     archived = sum(
@@ -548,7 +639,14 @@ def _apply_section_op(op, body):
     if idx is None:
         return None, f"{kind}: no section {heading!r} in {fname}"
     if kind == "replace_section":
-        secs[idx][1] = "\n\n" + (op.get("body") or "").strip() + "\n\n"
+        new = (op.get("body") or "").strip()
+        first, _, rest = new.partition("\n")
+        if re.match(r"#{2,3} \S", first):
+            # body opens with its own heading: a rename, so the old heading
+            # must not linger above it as an empty (still "active") entry
+            secs[idx] = [first.strip(), "\n\n" + rest.strip() + "\n\n"]
+        else:
+            secs[idx][1] = "\n\n" + new + "\n\n"
     else:  # delete_section removes heading+body wholesale
         del secs[idx]
     return _join_sections_raw(preamble, secs), None

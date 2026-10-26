@@ -1,0 +1,52 @@
+{
+ "name": "bugfix-closes-todo",
+ "description": "A known bug is root-caused, fixed and verified. The todo must close and a mistakes entry must record cause and prevention.",
+ "seed": {
+  "todo.md": "# Open Tasks\n\n## Fix cursor race in sync\n\n- Cursors sometimes advance even though the distill failed; content gets lost. Investigate.\n\n## Write release notes for 0.5\n\n- Draft CHANGELOG section.\n"
+ },
+ "sessions": [
+  {
+   "date": "2026-09-05T09:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "Let's finally fix the cursor race."
+    },
+    {
+     "role": "assistant",
+     "text": "Root cause: sync_project saved cursors.json before calling the curator, so a curator failure left the cursor advanced past content that was never distilled. Fix: moved the cursor save to after a successful apply. Added a regression test that breaks the backend and asserts the cursor did not move."
+    },
+    {
+     "role": "user",
+     "text": "Tests pass?"
+    },
+    {
+     "role": "assistant",
+     "text": "Yes, full suite green including the new regression test. The cursor race is fixed and verified."
+    },
+    {
+     "role": "user",
+     "text": "Great, log that as a mistake so we never persist state before the side effect succeeds."
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "todo.md",
+   "must_not": "(?i)cursor race"
+  },
+  {
+   "file": "todo.md",
+   "must": "(?i)release notes"
+  },
+  {
+   "file": "mistakes.md",
+   "must": "(?i)cursor"
+  },
+  {
+   "file": "mistakes.md",
+   "must": "(?i)(after|before).{0,80}(success|apply|curator)"
+  }
+ ]
+}

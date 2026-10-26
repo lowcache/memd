@@ -1,0 +1,32 @@
+{
+ "name": "keep-open",
+ "description": "A todo is discussed but the user explicitly says to keep it open. It must survive.",
+ "seed": {
+  "todo.md": "# Open Tasks\n\n## Migrate deployment to services.memd\n\n- Add memd flake input, delete old symlink + systemd entries, enable services.memd.\n"
+ },
+ "sessions": [
+  {
+   "date": "2026-09-06T11:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "Should we do the services.memd migration now?"
+    },
+    {
+     "role": "assistant",
+     "text": "It needs a rebuild of the NixOS config and a reboot-safe check of the sweep timer. It could take an hour."
+    },
+    {
+     "role": "user",
+     "text": "Not now. Keep it open, we'll do it after the release."
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "todo.md",
+   "must": "(?i)services\\.memd"
+  }
+ ]
+}

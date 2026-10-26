@@ -1,0 +1,50 @@
+{
+ "name": "decision-reversal",
+ "description": "A decision is made, then explicitly reversed in a later session. The reversal must win; the old choice must not survive as an active decision entry.",
+ "sessions": [
+  {
+   "date": "2026-09-01T10:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "For the job queue let's use PostgreSQL with SKIP LOCKED. We already run postgres for the app db, so no new service."
+    },
+    {
+     "role": "assistant",
+     "text": "Agreed. Decision: job queue = PostgreSQL table polled with SELECT ... FOR UPDATE SKIP LOCKED. Implemented queue/pg.py and the jobs table migration."
+    }
+   ]
+  },
+  {
+   "date": "2026-09-03T15:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "Postgres queue polling is hammering the db at 50ms intervals. Rip it out. Use SQLite in WAL mode for the job queue instead, it's local-only anyway."
+    },
+    {
+     "role": "assistant",
+     "text": "Done. Removed queue/pg.py and the jobs migration. New queue/sqlite.py uses a WAL-mode SQLite file at var/jobs.db. Decision changed: job queue is now SQLite (WAL), replacing the PostgreSQL SKIP LOCKED design because polling load on the shared db was too high."
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "decisions.md",
+   "must": "(?i)sqlite"
+  },
+  {
+   "file": "decisions.md",
+   "must": "(?i)wal"
+  },
+  {
+   "file": "decisions.md",
+   "must_not": "(?im)^#{2,3} (?![^\\n]*sqlite)[^\\n]*postgres"
+  },
+  {
+   "file": "*",
+   "must": "(?i)poll"
+  }
+ ]
+}

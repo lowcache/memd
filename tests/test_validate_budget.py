@@ -130,3 +130,39 @@ def test_budget_missing_file_is_noop(memd, env):
     proj = str(env.tmp / "bproj3")
     os.makedirs(os.path.join(proj, ".memory"))
     memd.enforce_budget_mistakes(proj, "proj", budget=10)  # must not raise
+
+
+def test_empty_replace_becomes_delete(memd):
+    """Curators retire a superseded entry by emptying it; the bare heading must
+    not survive as if it were still active (found by eval/decision-reversal)."""
+    memory = {"state.md": "", "todo.md": "", "mistakes.md": "",
+              "decisions.md": "# D\n\n### Old queue\n\npostgres.\n\n"
+                              "### New queue\n\nsqlite.\n"}
+    out = memd.validate({"summary": "s", "ops": [
+        {"op": "replace_section", "file": "decisions.md",
+         "heading": "### Old queue", "body": "  \n"}],
+        "mistakes_new_entries": [],
+        "archive_entries": [{"source": "decisions.md",
+                             "content": "### Old queue\n\npostgres."}]}, memory)
+    assert out["ops"] == [{"op": "delete_section", "file": "decisions.md",
+                           "heading": "### Old queue"}]
+    applied = memd.apply_ops(out["ops"], memory, skipped=[])
+    assert "Old queue" not in applied["decisions.md"]
+    assert "### New queue" in applied["decisions.md"]
+
+
+def test_replace_with_leading_heading_renames(memd):
+    """A replace body that opens with a heading renames the section; the old
+    heading must not survive as an empty entry (found by eval/decision-reversal)."""
+    memory = {"state.md": "", "todo.md": "", "mistakes.md": "",
+              "decisions.md": "# D\n\n## Queue: postgres (2026-09-01)\n\nskip locked.\n"}
+    out = memd.validate({"summary": "s", "ops": [
+        {"op": "replace_section", "file": "decisions.md",
+         "heading": "## Queue: postgres (2026-09-01)",
+         "body": "## Queue: sqlite WAL (2026-09-03)\n\n- replaces postgres."}],
+        "mistakes_new_entries": [], "archive_entries": []}, memory)
+    body = memd.apply_ops(out["ops"], memory, skipped=[])["decisions.md"]
+    assert "## Queue: postgres" not in body
+    assert "## Queue: sqlite WAL (2026-09-03)\n\n- replaces postgres." in body
+    assert [h for h, _ in memd.split_sections(body)] == [
+        "## Queue: sqlite WAL (2026-09-03)"]

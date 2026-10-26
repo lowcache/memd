@@ -77,7 +77,7 @@ Everything lands in four markdown files under `./.memory/`:
 
 Keeping the memory curated is only half the job. The models working in your codebase won't read `.memory/` unless something tells them it exists and how to behave around it. The rules boil down to three:
 
-1.  **Read first.** Check `state.md`, `decisions.md`, `mistakes.md`, and `todo.md` (or run `memd brief` for a short digest) before doing real work.
+1.  **Read first.** Check `state.md`, `decisions.md`, `mistakes.md`, and `todo.md` (or run `memd brief` for a short digest) before doing real work. To look up something specific, including what has been archived, run `memd recall <terms>`.
 2.  **Don't edit the memory files.** The curator owns them and rewrites them on every pass — hand-edits just get overwritten.
 3.  **Send new facts through the inbox.** `memd note -m "..."`, or drop a file in `.memory/inbox/`. One fact per note.
 
@@ -202,6 +202,7 @@ Configuration is stored in `$XDG_CONFIG_HOME/memd/config.json` (defaults to `~/.
 | `digest_cap_chars` | `integer` | `60000` | Maximum length of transcript digest fed to the LLM. Oversize digests drop whole low-signal sessions (named in an omission marker) rather than truncating mid-story. |
 | `min_digest_chars` | `integer` | `3000` | Sweep, session-end and pre-compact digests smaller than this (with no inbox notes) are deferred until more content arrives. `0` distills every time. |
 | `max_defer_hours` | `integer` | `24` | A deferred digest distills anyway once its oldest session span is this old. |
+| `curator_view_chars` | `integer` | `20000` | When `state.md`, `decisions.md` and `todo.md` together exceed this, the curator sees every heading but only the sections relevant to the new content (plus anything dated in the last 14 days). Edits to sections it wasn't shown are dropped. |
 | `capture_sidechains` | `boolean` | `true` | Include subagent ("sidechain") work from transcripts as indented secondary-signal lines. |
 | `quiet_seconds` | `integer` | `600` | Skip digesting transcripts modified within this cooldown period. |
 | `sweep_jobs` | `integer` | `4` | Number of worker threads for parallel sweeps. |
@@ -258,6 +259,7 @@ Session transcripts have a bad habit of containing API keys. Before anything rea
 | `memd sync` | Distill new session content into memory. Supports `--project <path>`, `--transcript <path>`, `--trigger <name>`, and `--dry-run`. | `0` (Success/No-op), `3` (Curator/distill failure) |
 | `memd sweep` | Periodic sweep to catch up all projects, ingest inbox files, and detect new git projects. Supports `--jobs <N>`. | `0` (Success), `1` (Any worker failed) |
 | `memd brief [path]` | Print the session-start brief (context injection). Supports `--max-chars <N>` and `--topic <keyword>`. | Prints brief text to stdout. |
+| `memd recall <terms>` | Search every memory section, archive included, ranked by relevance (BM25). Re-reads the markdown each time; there's no index to go stale. Supports `--project <path>`, `--limit <N>` and `--no-archive`. | `0` (Success, including no matches), `2` (Not in a memd project) |
 | `memd status` | Display registry, backlog bytes, and last distill summaries. | Prints status details. |
 | `memd install-hooks` | Idempotently wire hooks into `~/.claude/settings.json`. | Configures hooks. |
 | `memd note` | Append a collision-safe note to the project or global inbox. Supports `-m "<message>"` and `--global`. | `0` (Success), `2` (Config error) |
@@ -374,7 +376,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-184 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, silent-ingestion-breakage detection, and curation quality. Verified on Python 3.10 through 3.14.
+316 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, silent-ingestion-breakage detection, and curation quality. Verified on Python 3.10 through 3.14.
 
 To run tests in a Nix-isolated environment:
 ```bash

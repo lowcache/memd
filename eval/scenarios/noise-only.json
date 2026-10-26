@@ -1,0 +1,45 @@
+{
+ "name": "noise-only",
+ "description": "A session with nothing worth remembering. Memory must not change.",
+ "seed": {
+  "state.md": "# System State\n\n## Services\n\n- api: localhost:8080\n- worker: systemd user unit memd-worker.service\n",
+  "decisions.md": "# Architecture Decisions\n\n## Python 3.10+ only (2026-07-01)\n\nUse match statements and PEP 604 unions freely; 3.9 support dropped.\n"
+ },
+ "sessions": [
+  {
+   "date": "2026-09-07T20:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "hey, how's it going"
+    },
+    {
+     "role": "assistant",
+     "text": "Doing well. What are we working on?"
+    },
+    {
+     "role": "user",
+     "text": "nothing really, just curious what you think about tabs vs spaces lol"
+    },
+    {
+     "role": "assistant",
+     "text": "Spaces, per PEP 8, but it's a matter of taste."
+    },
+    {
+     "role": "user",
+     "text": "haha ok. thanks, bye"
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "state.md",
+   "unchanged": true
+  },
+  {
+   "file": "decisions.md",
+   "unchanged": true
+  }
+ ]
+}

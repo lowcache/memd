@@ -11,6 +11,7 @@ from memd.digest import baseline_cursor
 from memd.hooks import cmd_hook, cmd_install_hooks
 from memd.inbox import collect_inbox, write_inbox_note
 from memd.memory import find_project, make_brief, provision_project
+from memd.recall import search
 from memd.sweep import cmd_sweep, ensure_global
 from memd.sync import source_pending, sync_project, transcript_files
 
@@ -101,6 +102,28 @@ def cmd_note(cfg, args):
     return 0
 
 
+def cmd_recall(cfg, args):
+    if args.project:
+        path = os.path.realpath(args.project)
+        root = find_project(cfg, path) or path
+    else:
+        root = find_project(cfg, os.getcwd())
+        if root is None:
+            print("not in a memd project (use --project PATH)", file=sys.stderr)
+            return 2
+    hits = search(root, " ".join(args.query), limit=args.limit,
+                  include_archive=not args.no_archive)
+    if not hits:
+        print("no matches")
+        return 0
+    for h in hits:
+        print(f"[{h['file']}] {h['heading']}")
+        body = h["body"]
+        print(body if len(body) <= 600 else body[:600].rstrip() + " […]")
+        print()
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="memd", description=__doc__.splitlines()[0])
     ap.add_argument("--version", action="version", version=f"memd {__version__}")
@@ -132,6 +155,12 @@ def main():
     p.add_argument("--topic",
                    help="only content sections mentioning this keyword "
                         "(case-insensitive)")
+
+    p = sub.add_parser("recall", help="search memory sections, including the archive")
+    p.add_argument("query", nargs="+")
+    p.add_argument("--project", help="project path (default: the project containing cwd)")
+    p.add_argument("--limit", type=int, default=5)
+    p.add_argument("--no-archive", action="store_true", help="active memory files only")
 
     p = sub.add_parser("hook", help="claude-code hook entry (reads JSON on stdin)")
     p.add_argument("event", choices=["session-start", "session-end", "pre-compact"])
@@ -199,6 +228,8 @@ def main():
         brief = make_brief(cfg, args.path, max_chars=args.max_chars,
                            topic=args.topic)
         print(brief or "(no .memory directory here)")
+    elif args.cmd == "recall":
+        sys.exit(cmd_recall(cfg, args))
     elif args.cmd == "note":
         sys.exit(cmd_note(cfg, args))
     elif args.cmd == "hook":
