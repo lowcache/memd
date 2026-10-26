@@ -8,6 +8,35 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Removed
+
+- The pre-0.4 full-body curator protocol. A curator output carrying a non-null
+  `state_body`, `decisions_body` or `todo_body` now fails the distill with an
+  error naming the key, instead of being converted to `set_body`; `validate()`
+  no longer writes those keys back. Custom backends must emit `ops` (see
+  `contrib/curators/README.md`, whose smoke test now asks for them).
+
+### Added
+
+- Over-budget nudge. When `state.md`, `decisions.md` or `todo.md` exceeds its
+  budget, the curator prompt gets an `OVER BUDGET` notice listing the file's
+  three oldest dated sections, which are always shown in full, even in a
+  partial view. The charter says to archive what is superseded, completed or
+  no longer constrains work, and never to archive something only because it is
+  old. Code still never archives those files itself. `memd status` flags
+  over-budget files.
+- Eval scenario `over-budget-nudge`: the curator archives a superseded and a
+  completed decision and keeps an old one that is still in force.
+
+### Fixed
+
+- Charter: a replacement that changes what a section is about now starts its
+  body with the new heading, renaming the section. Curators sometimes kept a
+  stale heading over new content (eval decision-reversal: about 1 run in 10
+  before, 10 of 10 passing after).
+- README claimed code archives overflow of every memory file; only
+  `mistakes.md` is code-trimmed.
+
 ## [0.5.0] - 2026-10-25
 
 Cost and recall pass. Most of a curator call's tokens were overhead, not

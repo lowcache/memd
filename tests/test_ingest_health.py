@@ -72,8 +72,9 @@ def test_recognised_transcript_is_not_flagged(memd, env, memd_config,
                                               fake_curator):
     """A format memd does understand must not trip the signal."""
     canned = json.dumps({
-        "summary": "ok", "state_body": "## S\n\nfact.", "decisions_body": None,
-        "todo_body": None, "mistakes_new_entries": [], "archive_entries": [],
+        "summary": "ok", "ops": [{"op": "set_body", "file": "state.md",
+                                  "body": "## S\n\nfact."}],
+        "mistakes_new_entries": [], "archive_entries": [],
     })
     memd_config(curator_cmd=[fake_curator(canned), "{model}"],
                 git_commit=False, auto_scaffold=False)
@@ -94,8 +95,9 @@ def test_unknown_tool_format_digests_via_fallback(memd, env, memd_config,
     """The adapter contract: a schema memd has never seen is best-effort
     digested as text instead of stalling — the tool keeps learning."""
     canned = json.dumps({
-        "summary": "ok", "state_body": "## S\n\nfact.", "decisions_body": None,
-        "todo_body": None, "mistakes_new_entries": [], "archive_entries": [],
+        "summary": "ok", "ops": [{"op": "set_body", "file": "state.md",
+                                  "body": "## S\n\nfact."}],
+        "mistakes_new_entries": [], "archive_entries": [],
     })
     memd_config(curator_cmd=[fake_curator(canned), "{model}"],
                 git_commit=False, auto_scaffold=False)
@@ -130,8 +132,8 @@ def test_stall_clears_once_parsing_works_again(memd, env, memd_config,
     """The warning must not be sticky: it describes the present, and the
     backlog replays once parsing recovers."""
     canned = json.dumps({
-        "summary": "recovered", "state_body": "## S\n\nback.",
-        "decisions_body": None, "todo_body": None,
+        "summary": "recovered", "ops": [{"op": "set_body", "file": "state.md",
+                                         "body": "## S\n\nback."}],
         "mistakes_new_entries": [], "archive_entries": [],
     })
     memd_config(git_commit=False, auto_scaffold=False)

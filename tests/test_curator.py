@@ -158,26 +158,10 @@ EMPTY_MEMORY = {"state.md": "", "decisions.md": "", "todo.md": "",
                 "mistakes.md": ""}
 
 
-def test_validate_legacy_bodies_convert_to_set_body_ops(memd):
-    result = {"summary": "s", "state_body": "## S\n\nfact.",
-              "decisions_body": None, "todo_body": None}
-    out = memd.validate(result, dict(EMPTY_MEMORY))
-    assert out["ops"] == [{"op": "set_body", "file": "state.md",
-                           "body": "## S\n\nfact."}]
-    assert out["decisions_body"] is None
-    assert out["todo_body"] is None
-    # transition mirror: callers predating apply_ops read these keys
-    assert out["state_body"] == "## S\n\nfact."
-    assert set(out) >= {"summary", "ops", "mistakes_new_entries",
-                        "archive_entries"}
-
-
-def test_validate_legacy_empty_string_body_is_noop(memd):
-    # legacy sync skipped falsy bodies; conversion must not resurrect them as
-    # shrink-guard trips or wholesale wipes
-    out = memd.validate({"state_body": ""}, dict(EMPTY_MEMORY))
-    assert out["ops"] == []
-    assert out["state_body"] is None
+def test_validate_empty_set_body(memd):
+    out = memd.validate({"ops": [{"op": "set_body", "file": "state.md",
+                                  "body": ""}]}, dict(EMPTY_MEMORY))
+    assert out["ops"] == [{"op": "set_body", "file": "state.md", "body": ""}]
 
 
 def test_validate_native_ops_pass_through(memd):
@@ -238,7 +222,6 @@ def test_validate_drops_skeleton_set_body(memd):
         {"state.md": "", "decisions.md": "", "mistakes.md": "",
          "todo.md": "real todo content"})
     assert out["ops"] == []
-    assert out["todo_body"] is None
     with open(memd.LOG_PATH) as f:
         assert "; treated as no-change" in f.read()
 
@@ -314,12 +297,13 @@ def test_validate_allows_honest_section_edits(memd):
     assert len(out["ops"]) == 1
 
 
-def test_validate_legacy_shrink_guard_names_the_key(memd):
+def test_validate_shrink_guard_names_the_file(memd):
     memory = {"state.md": "", "decisions.md": "D" * 2000, "todo.md": "",
               "mistakes.md": ""}
     with pytest.raises(memd.CuratorError,
-                       match="shrink guard.*decisions_body"):
-        memd.validate({"decisions_body": "x" * 10}, memory)
+                       match=r"shrink guard.*decisions\.md"):
+        memd.validate({"ops": [{"op": "set_body", "file": "decisions.md",
+                                "body": "x" * 10}]}, memory)
 
 
 def test_validate_summary_normalized_and_defaults_present(memd):

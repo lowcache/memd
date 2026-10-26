@@ -72,8 +72,10 @@ MECHANICS
 - Do NOT modify mistakes.md with ops; only supply new entries via
   mistakes_new_entries.
 - If nothing changed, return an empty ops list.
-- If files exceed their budgets (given below), move the least-current
-  sections into archive_entries rather than deleting them.
+- When an OVER BUDGET section appears, shrink those files toward their
+  budgets: archive sections that are superseded, completed, or no longer
+  constrain future work (archive_entries + delete_section), or merge
+  overlapping sections. Never archive something only because it is old.
 - Multiple agents may have worked in parallel; merge their threads, dedupe.
 
 PARTIAL VIEW (large memories only)
@@ -120,6 +122,9 @@ OP RULES
 - replace_section/delete_section must quote the heading EXACTLY as it
   appears in the file, including the "## "/"### " prefix and inline text.
 - append_section fails if that heading already exists; use replace_section.
+- When a replacement changes what a section is about (a reversed decision,
+  a renamed component), begin its body with the new heading line: that
+  renames the section, so no stale heading survives above new content.
 - set_body (full-file replacement) is a last resort for wholesale
   restructuring, never for a single-section change.
 
@@ -194,6 +199,27 @@ def _partial_file(fname, body, shown):
 VIEW_FILES = ("state.md", "decisions.md", "todo.md")
 OVERSIZED_SECTION_CHARS = 2500
 VIEW_RECENT_DAYS = 14
+ARCHIVE_CANDIDATES = 3      # oldest dated sections shown per over-budget file
+
+
+def over_budget(cfg, memory):
+    """{file: (chars, budget)} for state/decisions/todo bodies over budget."""
+    out = {}
+    for f in VIEW_FILES:
+        n = len(memory.get(f) or "")
+        if n > cfg["budgets"][f]:
+            out[f] = (n, cfg["budgets"][f])
+    return out
+
+
+def archive_candidates(body, k=ARCHIVE_CANDIDATES):
+    """Headings of the k oldest dated sections (undated never qualify)."""
+    dated = []
+    for i, (heading, text) in enumerate(split_sections(body or "")):
+        date = section_date(heading + "\n" + text)
+        if date:
+            dated.append((date, i, heading))
+    return [heading for _, _, heading in sorted(dated)[:k]]
 
 
 def select_view(cfg, memory, digest, inbox_notes):
@@ -223,6 +249,8 @@ def select_view(cfg, memory, digest, inbox_notes):
             view[sec["file"]].add(sec["heading"])
             used += cost
             taken = True
+    for f in over_budget(cfg, memory):
+        view[f].update(archive_candidates(memory.get(f)))
     return view
 
 
@@ -234,6 +262,22 @@ def build_prompt(cfg, project_path, name, memory, digest, inbox_notes,
         f"DATE: {today()}",
         "BUDGETS (chars of body): "
         + ", ".join(f"{k}={v}" for k, v in budgets.items()),
+    ]
+    over = over_budget(cfg, memory)
+    if over:
+        parts.append(
+            "\n===== OVER BUDGET =====\n" + "\n".join(
+                f"{f}: {n:,} chars, budget {b:,}. Archive candidates (oldest dated "
+                "sections, shown in full): "
+                + (", ".join(f'"{h}"' for h in archive_candidates(memory.get(f)))
+                   or "none (no dated sections)")
+                for f, (n, b) in over.items())
+            + "\nShrink these files toward budget: archive sections that are superseded, "
+              "completed, or no longer constrain future work (archive_entries + "
+              "delete_section), or merge overlapping sections. Keep anything still "
+              "current, whatever its age."
+        )
+    parts.extend([
         (_partial_file("state.md", memory["state.md"], view["state.md"])
          if view is not None else
          "\n===== CURRENT state.md =====\n" + (memory["state.md"] or "(empty)")),
@@ -244,7 +288,7 @@ def build_prompt(cfg, project_path, name, memory, digest, inbox_notes,
         (_partial_file("todo.md", memory["todo.md"], view["todo.md"])
          if view is not None else
          "\n===== CURRENT todo.md =====\n" + (memory["todo.md"] or "(empty)")),
-    ]
+    ])
     if inbox_notes:
         parts.append("\n===== CURATOR INBOX =====\n" + "\n\n".join(inbox_notes))
     if recent_distills:
@@ -410,14 +454,6 @@ def _shrunk(old, new, archived):
             and len(new) + archived < len(old) * SHRINK_FLOOR)
 
 
-# Legacy full-file keys -> the files they map to. Accepted until the section-op
-# protocol has been out long enough to retire curators pinned to it; each
-# non-null value converts into a set_body op.
-LEGACY_BODY_KEYS = (("state_body", "state.md"),
-                    ("decisions_body", "decisions.md"),
-                    ("todo_body", "todo.md"))
-
-
 def _strip_wrappers(text):
     """Shared output hygiene for emitted bodies: strip markdown fences and
     curator-emitted YAML frontmatter. Returns (body, changed)."""
@@ -430,38 +466,21 @@ def _strip_wrappers(text):
 
 
 def validate(result, memory, view=None):
-    """Normalize and police curator output into the section-op protocol.
-
-    Accepts both protocols during the transition:
-    - legacy full-file bodies (state_body/decisions_body/todo_body) convert
-      into set_body ops, keeping older/weaker models usable;
-    - native "ops" lists are policed per-op (known op names and files, required
-      heading/body, mistakes.md reachable only via set_body).
-    Returns the SAME dict, always carrying the normalized shape
-    {"summary", "ops", "mistakes_new_entries", "archive_entries"} plus
-    state_body/decisions_body/todo_body mirrors of the surviving set_body ops
-    (a transition bridge so callers predating apply_ops keep working).
-    """
+    """Normalize and police curator output (the section-op protocol): known op names and
+    files, required heading/body, mistakes.md reachable only via mistakes_new_entries, the
+    shrink guard, and the partial-view rules. Non-null legacy full-body keys raise. Returns
+    the same dict with summary/ops/mistakes_new_entries/archive_entries normalized."""
     if not isinstance(result, dict):
         raise CuratorError("curator output is not an object")
 
-    # Phase 1 — shape. Legacy conversions first, then explicit ops: left-to-
-    # right composition means a hybrid output's section ops refine its own
-    # full-file bodies. Both sources then go through the identical phase-2
-    # policing (hygiene, skeleton drop, shrink guard).
+    # Phase 1 — shape: validate native ops before policing their bodies.
     items = []
-    for key, fname in LEGACY_BODY_KEYS:
-        v = result.get(key)
-        if v is None:
-            continue
-        if not isinstance(v, str):
-            raise CuratorError(f"{key} is not a string")
-        if not v.strip():
-            continue  # legacy "" was a silent no-op downstream; preserve that
-        if view is not None and fname in view:
-            log(f"dropped {key}: set_body on a partial-view file")
-            continue
-        items.append(({"op": "set_body", "file": fname, "body": v}, key))
+    legacy = [k for k in ("state_body", "decisions_body", "todo_body")
+              if result.get(k) is not None]
+    if legacy:
+        raise CuratorError(
+            f"{', '.join(legacy)}: the full-body output protocol was removed in "
+            "0.6.0; emit ops (set_body for a whole-file rewrite)")
 
     raw_ops = result.get("ops") or []
     if not isinstance(raw_ops, list):
@@ -566,15 +585,6 @@ def validate(result, memory, view=None):
     if not isinstance(result.get("archive_entries"), list):
         result["archive_entries"] = []
 
-    # Mirrors of the final set_body state per file: exactly what legacy
-    # callers read. Section-only outputs mirror as None (old callers then
-    # write nothing — acceptable mid-transition, apply_ops is the real path).
-    # CEILING: transition scaffolding. These keys and LEGACY_BODY_KEYS exist
-    # only for curators pinned to the pre-0.4.0 full-body contract; drop both
-    # (and the phase-1 conversion) in 0.6.0.
-    written = {e["file"]: e["body"] for e in ops if e["op"] == "set_body"}
-    for key, fname in LEGACY_BODY_KEYS:
-        result[key] = written.get(fname)
     return result
 
 

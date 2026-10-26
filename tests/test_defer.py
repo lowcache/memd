@@ -8,9 +8,7 @@ import pytest
 
 CANNED = json.dumps({
     "summary": "defer test",
-    "state_body": "## S\n\nfact.",
-    "decisions_body": None,
-    "todo_body": None,
+    "ops": [{"op": "set_body", "file": "state.md", "body": "## S\n\nfact."}],
     "mistakes_new_entries": [],
     "archive_entries": [],
 })

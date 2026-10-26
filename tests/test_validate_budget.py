@@ -17,21 +17,23 @@ def memory(state="", decisions="", mistakes="", todo=""):
 
 
 def test_validate_passthrough(memd):
-    result = {"summary": "s", "state_body": "x" * 900,
+    result = {"summary": "s", "ops": [{"op": "set_body", "file": "state.md",
+                                       "body": "x" * 900}],
               "mistakes_new_entries": ["### e\nok"]}
     assert memd.validate(result, memory(state="S" * 1000)) is result
 
 
 def test_validate_shrink_guard_trips(memd):
     # old body > 800 chars, new + archived < 40% of old -> reject
-    result = {"state_body": "x" * 100, "archive_entries": []}
+    result = {"ops": [{"op": "set_body", "file": "state.md",
+                       "body": "x" * 100}], "archive_entries": []}
     with pytest.raises(RuntimeError, match="shrink guard"):
         memd.validate(result, memory(state="S" * 1000))
 
 
 def test_validate_shrink_guard_archive_compensates(memd):
     result = {
-        "state_body": "x" * 100,
+        "ops": [{"op": "set_body", "file": "state.md", "body": "x" * 100}],
         "archive_entries": [{"source": "state.md", "content": "y" * 400}],
     }
     assert memd.validate(result, memory(state="S" * 1000)) is result
@@ -39,18 +41,18 @@ def test_validate_shrink_guard_archive_compensates(memd):
 
 def test_validate_shrink_guard_ignores_small_files(memd):
     # old body <= 800 chars: guard never trips even on a full wipe-and-rewrite
-    result = {"state_body": "x"}
+    result = {"ops": [{"op": "set_body", "file": "state.md", "body": "x"}]}
     assert memd.validate(result, memory(state="S" * 800)) is result
 
 
 def test_validate_shrink_guard_other_bodies(memd):
-    result = {"decisions_body": "x" * 10, "todo_body": None}
-    with pytest.raises(RuntimeError, match="decisions_body"):
+    result = {"ops": [{"op": "set_body", "file": "decisions.md", "body": "x" * 10}]}
+    with pytest.raises(RuntimeError, match=r"decisions\.md"):
         memd.validate(result, memory(decisions="D" * 2000))
 
 
-def test_validate_null_bodies_are_fine(memd):
-    result = {"state_body": None, "decisions_body": None, "todo_body": None}
+def test_validate_empty_ops_are_fine(memd):
+    result = {"ops": []}
     assert memd.validate(result, memory(state="S" * 5000)) is result
 
 
@@ -60,8 +62,9 @@ def test_validate_rejects_non_dict(memd):
 
 
 def test_validate_rejects_non_string_body(memd):
-    with pytest.raises(RuntimeError, match="state_body is not a string"):
-        memd.validate({"state_body": 42}, memory())
+    with pytest.raises(RuntimeError, match="missing or non-string body"):
+        memd.validate({"ops": [{"op": "set_body", "file": "state.md",
+                                "body": 42}]}, memory())
 
 
 def test_validate_rejects_non_string_mistake_entry(memd):
@@ -166,3 +169,8 @@ def test_replace_with_leading_heading_renames(memd):
     assert "## Queue: sqlite WAL (2026-09-03)\n\n- replaces postgres." in body
     assert [h for h, _ in memd.split_sections(body)] == [
         "## Queue: sqlite WAL (2026-09-03)"]
+
+
+def test_charter_teaches_rename_by_leading_heading(memd):
+    # eval/decision-reversal: curators kept a stale heading over new content
+    assert "begin its body with the new heading line" in memd.CHARTER

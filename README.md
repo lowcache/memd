@@ -69,7 +69,7 @@ Everything lands in four markdown files under `./.memory/`:
 | `todo.md` | What's still open: tasks, roadmap items, things to verify. | Finished or abandoned items move to the archive. |
 | `mistakes.md` | What went wrong before, and how to not do it again. | Append-only. Each entry: symptom, root cause, and the rule that prevents a repeat. |
 
-*Anything that overflows the size budgets gets moved to `./.memory/archive/YYYY-MM.md` instead of deleted.*
+*Content that leaves the active files is moved to `./.memory/archive/YYYY-MM.md`, never deleted, and `memd recall` still finds it.*
 
 ---
 
@@ -110,7 +110,7 @@ The curator model is useful but not trusted. The rules that keep the store *stru
 1.  **Frontmatter required:** Every memory file must carry valid YAML frontmatter (`type`, `project`, `last_updated`, `status`), or the write is rejected.
 2.  **Mistakes are forever:** `mistakes.md` is append-only. The curator can add entries but never edit or delete old ones.
 3.  **Shrink guard:** A distill that would delete more than 60% of a file gets rejected — unless the removed sections were explicitly moved to the archive.
-4.  **Size budgets:** Each file has a character cap (set in `config.json`). Overflow gets moved to `./.memory/archive/YYYY-MM.md`, oldest sections first.
+4.  **Size budgets:** Each file has a character cap (set in `config.json`). `mistakes.md` overflow is moved to the archive by code, oldest entries first. For `state.md`, `decisions.md` and `todo.md`, age says nothing about whether something is still true, so code never archives them on its own: an over-budget file gets an `OVER BUDGET` notice in the curator prompt with its oldest dated sections shown as candidates, the curator archives what is superseded or done, and `memd status` flags the file until it is back under budget.
 5.  **No races:** Per-project file locking (`flock`) keeps concurrent sweeps, hooks, and agents from corrupting each other's writes.
 6.  **Nothing skipped:** memd tracks how far it has read into each transcript and database, and only advances that marker after a successful distill and write — a failed run just gets retried from the same spot.
 
@@ -376,7 +376,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-316 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, silent-ingestion-breakage detection, and curation quality. Verified on Python 3.10 through 3.14.
+332 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, silent-ingestion-breakage detection, and curation quality. Verified on Python 3.10 through 3.14.
 
 To run tests in a Nix-isolated environment:
 ```bash

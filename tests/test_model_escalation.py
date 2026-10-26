@@ -6,9 +6,7 @@ import os
 
 CANNED = json.dumps({
     "summary": "escalation test",
-    "state_body": "## S\n\nfact.",
-    "decisions_body": None,
-    "todo_body": None,
+    "ops": [{"op": "set_body", "file": "state.md", "body": "## S\n\nfact."}],
     "mistakes_new_entries": [],
     "archive_entries": [],
 })

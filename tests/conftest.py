@@ -91,9 +91,8 @@ def git_project(env):
 # Canned curator response used by the end-to-end sync tests.
 CANNED_RESPONSE = {
     "summary": "test distill",
-    "state_body": "## System State\n\ne2e marker state fact.",
-    "decisions_body": None,
-    "todo_body": None,
+    "ops": [{"op": "set_body", "file": "state.md",
+             "body": "## System State\n\ne2e marker state fact."}],
     "mistakes_new_entries": [
         "### 2026-07-04 — e2e test entry\nsymptom/cause/prevention."
     ],

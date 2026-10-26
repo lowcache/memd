@@ -106,7 +106,7 @@ A minimal shell script backend must satisfy the following requirements:
 One-line smoke test to verify a custom backend before wiring it into memd:
 
 ```sh
-printf 'Output exactly one JSON object, no markdown fences, no prose around it, with\nkeys: summary (string), state_body (string or null), decisions_body (string or\nnull), todo_body (string or null), mistakes_new_entries (array), archive_entries\n(array). The project state is: the API moved from port 8080 to port 9090.\n' | /path/to/your-curator.sh YOUR_MODEL_NAME
+printf 'Output exactly one JSON object, no markdown fences, no prose around it, with\nkeys: summary (string), "ops" (array of objects with "op", "file", "heading",\n"body"), mistakes_new_entries (array), archive_entries (array). The project\nstate is: the API moved from port 8080 to port 9090.\n' | /path/to/your-curator.sh YOUR_MODEL_NAME
 ```
 
 ## 6. Model-Size Guidance

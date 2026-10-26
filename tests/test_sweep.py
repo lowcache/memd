@@ -9,9 +9,8 @@ import time
 
 CANNED = json.dumps({
     "summary": "sweep distill",
-    "state_body": "## State\n\nswept marker.",
-    "decisions_body": None,
-    "todo_body": None,
+    "ops": [{"op": "set_body", "file": "state.md",
+             "body": "## State\n\nswept marker."}],
     "mistakes_new_entries": [],
     "archive_entries": [],
 })

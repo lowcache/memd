@@ -7,10 +7,11 @@ import sys
 from memd import __doc__, __version__
 from memd.config import (CURSORS_PATH, LOG_PATH, META_PATH, git_toplevel,
                          load_config, load_json, save_config, update_json)
+from memd.curator import over_budget
 from memd.digest import baseline_cursor
 from memd.hooks import cmd_hook, cmd_install_hooks
 from memd.inbox import collect_inbox, write_inbox_note
-from memd.memory import find_project, make_brief, provision_project
+from memd.memory import find_project, make_brief, provision_project, read_memory
 from memd.recall import search
 from memd.sweep import cmd_sweep, ensure_global
 from memd.sync import source_pending, sync_project, transcript_files
@@ -69,6 +70,11 @@ def cmd_status(cfg):
             toks = sum(u.get("input_tokens") or 0 for u in spent)
             print(f"  curator cost : ${cost:.2f}, {toks} input tokens over "
                   f"{len(spent)} logged distill(s)")
+        over = over_budget(cfg, read_memory(path))
+        if over:
+            print("  ! over budget: " + ", ".join(
+                f"{f} {n / 1000:.1f}k/{b / 1000:.1f}k"
+                for f, (n, b) in over.items()))
         print(f"  sources      : {len(srcs)} ({ag} antigravity), "
               f"{len(pending)} with pending content, {inbox} inbox note(s)")
         stalled = m.get("ingest_stalled_bytes")

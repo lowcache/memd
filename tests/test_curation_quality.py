@@ -91,10 +91,6 @@ def test_validate_skeleton_nullified(memd):
 
     res = memd.validate(result, memory)
     assert res["ops"] == []
-    # mirrors report no pending write for any of the three files
-    assert res["state_body"] is None
-    assert res["decisions_body"] is None
-    assert res["todo_body"] is None
 
     with open(memd.LOG_PATH) as f:
         log_text = f.read()
@@ -108,7 +104,6 @@ def test_validate_clean_passthrough(memd):
 
     res = memd.validate(result, dict(EMPTY_MEMORY))
     assert res["ops"][0]["body"] == "## System State\n\nActive configuration."
-    assert res["state_body"] == "## System State\n\nActive configuration."
 
 
 def test_validate_shrink_guard_regression(memd):
@@ -240,9 +235,8 @@ def test_e2e_normalization_and_dedupe(memd, e2e, fake_curator, memd_config):
     """End-to-end e2e verification of curation quality normalizations and deduplication."""
     canned = {
         "summary": "e2e quality test",
-        "state_body": "```markdown\n---\ntype: state\n---\n## System State\n\nnormalized active config.\n```",
-        "decisions_body": None,
-        "todo_body": None,
+        "ops": [{"op": "set_body", "file": "state.md",
+                 "body": "```markdown\n---\ntype: state\n---\n## System State\n\nnormalized active config.\n```"}],
         "mistakes_new_entries": [
             "### 2026-07-04 — e2e test entry\nsymptom/cause/prevention."
         ],
@@ -253,7 +247,7 @@ def test_e2e_normalization_and_dedupe(memd, e2e, fake_curator, memd_config):
 
     res1 = e2e.sync()
     assert res1.returncode == 0
-    
+
     state_content = e2e.read_mem("state.md")
     meta, body = memd.split_frontmatter(state_content)
     assert "normalized active config." in body
