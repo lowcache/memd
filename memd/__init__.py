@@ -15,7 +15,7 @@ the invariants the model must not be trusted with: frontmatter, append-only
 mistakes.md, shrink guard, size budgets, archive overflow, git audit commits.
 """
 
-__version__ = "0.4.2"
+__version__ = "0.5.0"
 
 from memd.errors import ConfigError, CuratorError, DigestError, MemdError
 from memd.config import (

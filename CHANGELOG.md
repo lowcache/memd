@@ -8,7 +8,13 @@ and this project adheres to
 
 ## [Unreleased]
 
-Distill cost pass: most of a curator call's tokens were overhead, not memory.
+## [0.5.0] - 2026-10-25
+
+Cost and recall pass. Most of a curator call's tokens were overhead, not
+memory; distills now send only memd's prompt, skip tiny digests, and show
+large memories to the curator as a partial view (78% smaller prompt on a
+real 147k-character memory). Memory gains a search command, and a
+recall-quality eval now measures what the curator keeps.
 
 ### Changed
 
@@ -26,8 +32,32 @@ Distill cost pass: most of a curator call's tokens were overhead, not memory.
   its oldest span is `max_defer_hours` (24) old. Cursors don't move, so nothing
   is lost; manual syncs and inbox notes are never deferred. `0` disables it.
 
+### Fixed
+
+Both found by the new eval (decision-reversal), each with a regression test:
+
+- A `replace_section` whose body opens with its own heading now renames the
+  section. Curators use it to rewrite a superseded decision, and memd kept the
+  old heading above the new one: an empty entry still reading as active.
+- A `replace_section` with an empty body is treated as `delete_section`, so a
+  retired entry doesn't leave its bare heading behind.
+
 ### Added
 
+- `memd recall <terms>`: BM25 search over every memory section, archive
+  included. Stateless: it re-reads the markdown on each query (23 ms over a
+  407k-character memory), so there is no index or database to go stale. The
+  session brief now points agents at it.
+- Partial curator view. When state/decisions/todo exceed `curator_view_chars`
+  (20,000), the curator sees every heading but only the bodies relevant to the
+  digest and inbox (plus sections dated within 14 days). Ops on sections it
+  was not shown are dropped, `set_body` is refused on a partial file, and
+  oversized sections are flagged for splitting into `###` subsections.
+- `eval/`: a recall-quality harness. `python eval/run.py` replays scenario
+  transcripts through the real pipeline and checks the resulting memory with
+  regex probes (facts kept, superseded facts gone, open todos kept, noise
+  ignored, nothing lost under a partial view), reporting tokens and cost per
+  scenario. Runs on demand against the real curator; not part of CI.
 - Per-distill token and cost figures (`usage`) in the distill journal, read
   from the `claude -p` envelope and summed across retries; `memd status`
   prints the total per project.
