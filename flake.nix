@@ -11,8 +11,24 @@
         "aarch64-linux"
       ];
       forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
-      # NOTE: must match `__version__` in memd/__init__.py
-      version = "0.2.0";
+      # Read the version out of memd/__init__.py rather than restating it. The
+      # previous "NOTE: must match" comment did not stop the two from drifting:
+      # this said 0.2.0 (a version never tagged) while the package said 0.4.2,
+      # and the v0.4.2 tag shipped that way, so anyone building the flake got a
+      # derivation labelled memd-0.2.0. A comment is not a constraint; this is.
+      version =
+        let
+          initPy = builtins.readFile ./memd/__init__.py;
+          matches = builtins.filter (m: m != null) (
+            map (line: builtins.match ''__version__ = "([^"]+)"'' line) (
+              nixpkgs.lib.splitString "\n" initPy
+            )
+          );
+        in
+        if matches == [ ] then
+          throw "memd flake: no __version__ line found in memd/__init__.py"
+        else
+          builtins.head (builtins.head matches);
     in
     {
       packages = forAll (pkgs: rec {
@@ -63,7 +79,15 @@
                 nativeBuildInputs = [ memd ];
               }
               ''
-                memd --version
+                # Both sides now read memd/__init__.py, so they cannot disagree
+                # about the NUMBER. What this still catches is the `--version`
+                # output FORMAT changing out from under packagers: nixpkgs-style
+                # versionCheckHook greps this string, and llm-agents.nix does.
+                got="$(memd --version)"
+                if [ "$got" != "memd ${version}" ]; then
+                  echo "memd: version mismatch: --version says '$got', flake built ${version}" >&2
+                  exit 1
+                fi
                 memd --help > /dev/null
                 touch $out
               '';
