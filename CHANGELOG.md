@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-28
+
 ### Removed
 
 - The pre-0.4 full-body curator protocol. A curator output carrying a non-null
