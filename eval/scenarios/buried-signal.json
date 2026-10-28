@@ -1,0 +1,45 @@
+{
+ "name": "buried-signal",
+ "description": "A long session of tool-output noise hides one non-derivable gotcha. The gotcha must land; the noise must not.",
+ "sessions": [
+  {
+   "date": "2026-09-14T10:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "run the suite"
+    },
+    {
+     "role": "assistant",
+     "text": "$ ls\nREADME.md  pyproject.toml  memd/  tests/  quux_helper.py  scripts/  eval/  docs/\n$ pytest -q\ntests/test_alpha.py::test_alpha_case_0 PASSED\ntests/test_alpha.py::test_alpha_case_1 PASSED\ntests/test_alpha.py::test_alpha_case_2 PASSED\ntests/test_alpha.py::test_alpha_case_3 PASSED\ntests/test_alpha.py::test_alpha_case_4 PASSED\ntests/test_alpha.py::test_alpha_case_5 PASSED\ntests/test_beta.py::test_beta_case_0 PASSED\ntests/test_beta.py::test_beta_case_1 PASSED\ntests/test_beta.py::test_beta_case_2 PASSED\ntests/test_beta.py::test_beta_case_3 PASSED\ntests/test_beta.py::test_beta_case_4 PASSED\ntests/test_beta.py::test_beta_case_5 PASSED\ntests/test_gamma.py::test_gamma_case_0 PASSED\ntests/test_gamma.py::test_gamma_case_1 PASSED\ntests/test_gamma.py::test_gamma_case_2 PASSED\ntests/test_gamma.py::test_gamma_case_3 PASSED\ntests/test_gamma.py::test_gamma_case_4 PASSED\ntests/test_gamma.py::test_gamma_case_5 PASSED\ntests/test_zeta_omega_marker.py::test_zeta_omega_marker_case_0 PASSED\ntests/test_zeta_omega_marker.py::test_zeta_omega_marker_case_1 PASSED\ntests/test_zeta_omega_marker.py::test_zeta_omega_marker_case_2 PASSED\ntests/test_zeta_omega_marker.py::test_zeta_omega_marker_case_3 PASSED\ntests/test_zeta_omega_marker.py::test_zeta_omega_marker_case_4 PASSED\ntests/test_zeta_omega_marker.py::test_zeta_omega_marker_case_5 PASSED\n24 passed in 3.1s"
+    },
+    {
+     "role": "user",
+     "text": "now with -n auto, I want it faster"
+    },
+    {
+     "role": "assistant",
+     "text": "$ pytest -q -n auto\nFAILED tests/test_locking.py::test_registry_lock - BlockingIOError\nThe fcntl registry-lock tests deadlock or fail under pytest-xdist because workers share the lock file. Running them with -p no:xdist passes. Gotcha: the locking tests must not run under xdist; keep -n auto off for tests/test_locking.py."
+    },
+    {
+     "role": "user",
+     "text": "ok fine, leave it serial"
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "*",
+   "must": "(?i)xdist"
+  },
+  {
+   "file": "*",
+   "must_not": "zeta_omega_marker"
+  },
+  {
+   "file": "*",
+   "must_not": "quux_helper"
+  }
+ ]
+}

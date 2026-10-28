@@ -37,6 +37,8 @@ def cmd_hook(cfg, event):
         payload = json.load(sys.stdin)
     except json.JSONDecodeError:
         payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
     try:
         return _run_hook(cfg, event, payload)
     except (RuntimeError, OSError) as e:

@@ -1,7 +1,7 @@
 # memd — Agent-Driven Project Memory Curator
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/lowcache/memd/main/assets/memd.png" alt="memd logo" />
+  <img src="https://raw.githubusercontent.com/lowcache/memd/main/assets/memd.jpeg" alt="memd logo" />
 </p>
 
 [![CI](https://github.com/lowcache/memd/actions/workflows/ci.yml/badge.svg)](https://github.com/lowcache/memd/actions/workflows/ci.yml)
@@ -153,6 +153,8 @@ For complete writer/reader guidelines, see [INBOX-PROTOCOL.md](INBOX-PROTOCOL.md
 
 ## How memd Uses Your Model
 
+The backend transport, prompt, output schema and guards are defined in [docs/curator-protocol.md](docs/curator-protocol.md).
+
 Distilling means sending session content to an LLM, so it's worth being precise about what goes where and what it costs.
 
 **What gets sent.** Whatever is new in your transcripts since the last run — as chronologically ordered, timestamped session spans — capped at `digest_cap_chars` (60,000 by default), plus the current memory files (`mistakes.md` only as a heading index; it is append-only). Credentials are scrubbed first — 13 patterns, [detailed below](#built-in-credential-redaction) — but that's shape-matching, not a guarantee.
@@ -191,39 +193,11 @@ Configuration is stored in `$XDG_CONFIG_HOME/memd/config.json` (defaults to `~/.
 
 ### Key Reference & Defaults
 
-| Option | Type | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `claude_bin` | `string` | `"claude"` | Name or path of the `claude-code` binary. |
-| `curator_cmd` | `array` | `[]` | Override list of arguments to invoke a custom curator backend (e.g., `["nix", "run", ".#", "--", "status"]`). Substitutes `{model}`. If empty, falls back to the headless `claude_bin` command. |
-| `antigravity_dir` | `string` | `"~/.gemini/antigravity-cli"` | Directory containing native SQLite database conversations. |
-| `model_small` | `string` | `"sonnet"` | Model used for routine distills. Set to `"haiku"` to cut cost. |
-| `model_large` | `string` | `"sonnet"` | Model used once a digest exceeds `escalate_chars`. |
-| `escalate_chars` | `integer` | `15000` | Digest size above which `model_large` is used, whatever triggered the distill. |
-| `digest_cap_chars` | `integer` | `60000` | Maximum length of transcript digest fed to the LLM. Oversize digests drop whole low-signal sessions (named in an omission marker) rather than truncating mid-story. |
-| `min_digest_chars` | `integer` | `3000` | Sweep, session-end and pre-compact digests smaller than this (with no inbox notes) are deferred until more content arrives. `0` distills every time. |
-| `max_defer_hours` | `integer` | `24` | A deferred digest distills anyway once its oldest session span is this old. |
-| `curator_view_chars` | `integer` | `20000` | When `state.md`, `decisions.md` and `todo.md` together exceed this, the curator sees every heading but only the sections relevant to the new content (plus anything dated in the last 14 days). Edits to sections it wasn't shown are dropped. |
-| `capture_sidechains` | `boolean` | `true` | Include subagent ("sidechain") work from transcripts as indented secondary-signal lines. |
-| `quiet_seconds` | `integer` | `600` | Skip digesting transcripts modified within this cooldown period. |
-| `sweep_jobs` | `integer` | `4` | Number of worker threads for parallel sweeps. |
-| `auto_scaffold` | `boolean` | `true` | Auto-create `.memory/` structure inside detected git repositories. |
-| `git_commit` | `boolean` | `true` | Automatically run `git commit` on memory files after successful distill. |
-| `budgets` | `object` | See below | Dictionary specifying character size caps for active memory files before archiving. |
-| `REDACT_EXTRA_PATTERNS` | `array` | `[]` | List of raw regex patterns for custom credential redaction. |
-| `exclude` | `array` | `[]` | List of absolute project paths to ignore during sweeps. |
-| `projects` | `object` | `{}` | Mapping of absolute paths to project definitions: `{"<path>": {"name": "memd", "extra_sources": ["*.jsonl"]}}`. |
-| `global_root` | `string` | `HOME` | Path to the global fallback project root. |
-| `global_brief_chars` | `integer` | `800` | Max character excerpt of global `state.md` injected into a project's brief. |
+Use `model_small` to select the routine model and `curator_cmd` to select a backend.
+The complete defaults and behavior are in [docs/configuration.md](docs/configuration.md).
 
 #### Default File Budgets
-```json
-"budgets": {
-  "state.md": 10000,
-  "decisions.md": 12000,
-  "todo.md": 10000,
-  "mistakes.md": 22000
-}
-```
+`budgets` sets per-file body character budgets; the configuration reference describes defaults and overflow behavior.
 
 ---
 
@@ -253,18 +227,18 @@ Session transcripts have a bad habit of containing API keys. Before anything rea
 
 ## CLI Command Quick Reference
 
-| Command | Usage | Exit Codes & Notes |
-| :--- | :--- | :--- |
-| `memd init [path]` | Scaffold `.memory/` & register a project. Supports `--name <name>` and `--global` (sets up the fallback root). | `0` (Success), `2` (Config error) |
-| `memd sync` | Distill new session content into memory. Supports `--project <path>`, `--transcript <path>`, `--trigger <name>`, and `--dry-run`. | `0` (Success/No-op), `3` (Curator/distill failure) |
-| `memd sweep` | Periodic sweep to catch up all projects, ingest inbox files, and detect new git projects. Supports `--jobs <N>`. | `0` (Success), `1` (Any worker failed) |
-| `memd brief [path]` | Print the session-start brief (context injection). Supports `--max-chars <N>` and `--topic <keyword>`. | Prints brief text to stdout. |
-| `memd recall <terms>` | Search every memory section, archive included, ranked by relevance (BM25). Re-reads the markdown each time; there's no index to go stale. Supports `--project <path>`, `--limit <N>` and `--no-archive`. | `0` (Success, including no matches), `2` (Not in a memd project) |
-| `memd status` | Display registry, backlog bytes, and last distill summaries. | Prints status details. |
-| `memd install-hooks` | Idempotently wire hooks into `~/.claude/settings.json`. | Configures hooks. |
-| `memd note` | Append a collision-safe note to the project or global inbox. Supports `-m "<message>"` and `--global`. | `0` (Success), `2` (Config error) |
-| `memd exclude <path>`| Exclude a path from automatic project discovery. | Registers path to exclude list. |
-| `memd hook <event>` | Invoked by `claude-code` CLI lifecycle events. | `session-start`, `session-end`, `pre-compact` |
+- `memd init [path]`: provision memory and register a project.
+- `memd sync`: distill new session content and inbox notes.
+- `memd sweep`: catch up projects and maintain memory.
+- `memd status`: show the backend, registry and ingestion status.
+- `memd install-hooks`: install lifecycle hooks.
+- `memd brief [path]`: print a session-start brief.
+- `memd recall <terms>`: search active and archived memory.
+- `memd hook <event>`: handle a lifecycle event.
+- `memd note`: publish a curator inbox note.
+- `memd exclude <path>`: exclude a path from automatic discovery.
+
+See [docs/cli.md](docs/cli.md) for arguments, output and exit codes.
 
 ---
 
@@ -376,7 +350,7 @@ Symlink the shim onto your `PATH` for a live-updating install: `ln -s "$PWD/memd
 
 ## Testing & Verification
 
-332 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, silent-ingestion-breakage detection, and curation quality. Verified on Python 3.10 through 3.14.
+369 automated tests cover the parts that would hurt if they broke: XDG isolation, cursors, redaction, database parsing, atomic inbox publishing (including an 8-writer concurrency stress test), retry policies, curator output parsing (including the malformed JSON small models produce), brief budgeting, memory-repo decoupling + worktree sharing, silent-ingestion-breakage detection, and curation quality. Verified on Python 3.10 through 3.14.
 
 To run tests in a Nix-isolated environment:
 ```bash
@@ -386,6 +360,11 @@ nix flake check
 Or run via `pytest` locally:
 ```bash
 python -m pytest tests/ -q
+```
+
+The curation-quality eval replays scripted sessions (`eval/scenarios/*.json`) through the real pipeline and a real curator, then checks the resulting memory with regex probes. It spends model tokens. Each scenario runs `--samples` times; a scenario passes only if every sample does:
+```bash
+python eval/run.py --samples 3 --jobs 6 --config '{"model_small": "haiku"}'
 ```
 
 ---

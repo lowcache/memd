@@ -43,8 +43,9 @@ ports, versions, paths); discovered constraints and gotchas; root causes of
 failures and their fixes; open threads and explicitly deferred work; exact
 commands/flags that were hard to derive; scope agreements with the user.
 DISCARD: conversational chatter, tangents, abandoned exploration that taught
-nothing, restated file contents, tool-call play-by-play, anything derivable
-by reading the repo itself, pleasantries, duplicate statements of known facts.
+nothing, restated file contents, tool-call play-by-play, command output,
+test counts and file listings, anything derivable by reading the repo
+itself, pleasantries, duplicate statements of known facts.
 When in doubt: would omitting this cause a future agent to repeat work or
 repeat a mistake? If no, discard.
 
@@ -63,7 +64,8 @@ PRUNING DISCIPLINE
 STYLE
 - Succinct and thorough. Dense declarative prose or tight bullets.
 - No meta-commentary ("in this session we..."), no praise, no hedging.
-- Use absolute dates (YYYY-MM-DD), never "today"/"recently".
+- Use absolute dates (YYYY-MM-DD), never "today"/"recently". Resolve
+  relative dates ("next Monday", "in two weeks") against the session date.
 - Stay grounded in the project's stated scope; do not invent goals.
 - Preserve existing structure and headings where they still serve.
 
@@ -436,10 +438,8 @@ def _call_curator_once(cfg, prompt, model, usage=None):
 
 # Section-op protocol: the only op names and files validate() accepts.
 OP_NAMES = ("replace_section", "append_section", "delete_section", "set_body")
-# mistakes.md is accepted here but NOT advertised in the charter's output
-# schema: only a legacy full-body curator can name it, and sync drops that
-# write to keep the log append-only. Advertising it invited the section ops
-# that validate() then rejects outright.
+# mistakes.md is accepted but not advertised in the charter: a set_body on it is
+# dropped (and logged) by sync; section ops on it are rejected by validate().
 OP_FILES = ("state.md", "decisions.md", "todo.md", "mistakes.md")
 
 # A curated file may not lose more than this share of its size in one distill
@@ -529,10 +529,17 @@ def validate(result, memory, view=None):
                 continue
         items.append((entry, label))
 
+    archive = result.get("archive_entries") or []
+    if not isinstance(archive, list):
+        raise CuratorError("archive_entries is not a list")
+    for i, a in enumerate(archive):
+        if isinstance(a, str):
+            archive[i] = a = {"source": "?", "content": a}
+        if not (isinstance(a, dict) and isinstance(a.get("content"), str)):
+            raise CuratorError(f"archive_entries[{i}]: expected {{source, content}}")
+    result["archive_entries"] = archive
     ops = []
-    archived = sum(
-        len(a.get("content", "")) for a in result.get("archive_entries", [])
-        if isinstance(a, dict))
+    archived = sum(len(a["content"]) for a in archive)
     # Phase 2 — police every op identically regardless of protocol origin.
     for entry, label in items:
         kind, fname = entry["op"], entry["file"]
@@ -582,8 +589,6 @@ def validate(result, memory, view=None):
         if not isinstance(e, str):
             raise CuratorError("mistakes_new_entries contains a non-string")
     result["mistakes_new_entries"] = entries
-    if not isinstance(result.get("archive_entries"), list):
-        result["archive_entries"] = []
 
     return result
 

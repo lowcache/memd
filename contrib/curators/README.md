@@ -9,13 +9,17 @@ input and expects a single JSON object on standard output.
 
 ## 2. The Contract
 
+The full protocol is in [docs/curator-protocol.md](../../docs/curator-protocol.md).
+
 1. If `curator_cmd` is non-empty, memd substitutes the literal token `{model}`
    in every argument with the configured model name (`model_small` or
    `model_large`), then executes that command line.
 2. The full prompt is written to the child process's standard input as text.
-3. memd waits up to 600 seconds, then reads standard output.
-4. A non-zero exit code is treated as a failure and retried twice (with 5s
-   and 15s backoff intervals).
+3. memd captures standard output with a 600-second timeout per invocation.
+4. A non-zero exit code, timeout, unparseable output, or invocation OSError
+   other than a missing executable is retried twice (with 5s and 15s backoff
+   intervals). A missing executable fails immediately. Output validation happens
+   after the call and is not retried.
 5. Standard output is parsed in order:
    - If output parses as JSON and is an object with a string `result` key,
      the value of `result` becomes the text.
@@ -23,9 +27,12 @@ input and expects a single JSON object on standard output.
      directly as the curator result.
    - Else the raw output is treated as text, leading/trailing markdown code
      fences are stripped, the first `{` is located, and one JSON object is
-     decoded from there. Trailing prose after the JSON object is tolerated.
-6. Therefore, a valid backend is any command that reads a prompt on standard
-   input and writes a single JSON object to standard output.
+     decoded from there. Raw control characters in JSON strings and trailing
+     prose after the JSON object are tolerated. Non-object JSON follows this
+     text-parsing path too.
+6. A valid backend reads the charter and prompt on standard input and writes
+   one JSON object satisfying the output schema and guards in the full protocol
+   to standard output. It exits zero on success.
 
 ## 3. ollama (local models)
 

@@ -1,0 +1,53 @@
+{
+ "name": "routing",
+ "description": "One session produces a state change, a decision, a deferred task and a mistake. Each must land in its own file.",
+ "sessions": [
+  {
+   "date": "2026-09-15T11:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "staging db moved to db2.internal yesterday, update the env."
+    },
+    {
+     "role": "assistant",
+     "text": "Updated STAGING_DATABASE_URL to postgres://db2.internal:5432/app. Note: the migration I ran first hit production, because the migrate script falls back to DATABASE_URL, which defaults to the prod DSN when unset. Rolled it back from the 10:40 snapshot; prod is intact."
+    },
+    {
+     "role": "user",
+     "text": "Remove that default. Migrations must fail when no URL is set."
+    },
+    {
+     "role": "assistant",
+     "text": "Done: migrate.py now exits with an error when DATABASE_URL is unset; no default DSN anywhere."
+    },
+    {
+     "role": "user",
+     "text": "Also, from now on primary keys are UUIDv7, they sort by time and we need that for the event log. Backfilling the old integer ids can wait until after the release."
+    },
+    {
+     "role": "assistant",
+     "text": "Noted: new tables use UUIDv7 keys. Backfill of existing integer ids is deferred until after the release."
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "state.md",
+   "must": "db2\\.internal"
+  },
+  {
+   "file": "decisions.md",
+   "must": "(?i)uuid ?v7"
+  },
+  {
+   "file": "todo.md",
+   "must": "(?i)backfill"
+  },
+  {
+   "file": "mistakes.md",
+   "must": "(?i)database_url"
+  }
+ ]
+}

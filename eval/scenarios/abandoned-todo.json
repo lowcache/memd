@@ -1,0 +1,36 @@
+{
+ "name": "abandoned-todo",
+ "description": "The user explicitly abandons a todo. It must leave todo.md and land in the archive; the other todo stays.",
+ "seed": {
+  "todo.md": "# Open Tasks\n\n## Windows port\n\n- Make the hook installer work under PowerShell.\n\n## Docs for 1.0\n\n- Contract docs for config, CLI, curator.\n"
+ },
+ "sessions": [
+  {
+   "date": "2026-09-19T10:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "Drop the Windows port. Nobody asked for it and it doubles the hook surface. We're not doing it."
+    },
+    {
+     "role": "assistant",
+     "text": "Understood, the Windows port is abandoned."
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "todo.md",
+   "must_not": "(?i)windows"
+  },
+  {
+   "file": "archive",
+   "must": "(?i)windows"
+  },
+  {
+   "file": "todo.md",
+   "must": "(?i)docs for 1\\.0"
+  }
+ ]
+}

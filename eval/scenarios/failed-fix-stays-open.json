@@ -1,0 +1,44 @@
+{
+ "name": "failed-fix-stays-open",
+ "description": "An agent claims a fix, then CI shows the bug still reproduces. The todo must stay open and must not be archived.",
+ "seed": {
+  "todo.md": "# Open Tasks\n\n## Flaky upload test\n\n- tests/test_upload.py::test_resume fails intermittently on CI.\n\n## Tag 0.6\n\n- After the docs land.\n"
+ },
+ "sessions": [
+  {
+   "date": "2026-09-11T14:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "Can you look at the flaky upload test again?"
+    },
+    {
+     "role": "assistant",
+     "text": "Added a retry around the chunk PUT in upload/resume.py. That should fix test_resume."
+    },
+    {
+     "role": "user",
+     "text": "I pushed it. CI still failed test_resume in 2 of 5 runs, same timeout."
+    },
+    {
+     "role": "assistant",
+     "text": "Understood, the retry did not fix it. The timeout happens before the first chunk is sent, so the cause is elsewhere. I'll leave it here for now."
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "todo.md",
+   "must": "(?i)upload"
+  },
+  {
+   "file": "archive",
+   "must_not": "(?i)flaky upload"
+  },
+  {
+   "file": "todo.md",
+   "must": "(?i)tag 0\\.6"
+  }
+ ]
+}

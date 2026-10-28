@@ -1,0 +1,40 @@
+{
+ "name": "mistakes-append-only",
+ "description": "A new mistake is logged while the session also criticises an old entry's wording. Old entries survive verbatim; the new one is appended.",
+ "seed": {
+  "mistakes.md": "# Mistakes Log\n\n### 2026-08-01 \u2014 Cursor saved before distill\nSymptom: content lost after curator failure. Cause: cursor persisted before apply. Prevention: persist cursors only after a successful apply.\n\n### 2026-08-20 \u2014 Release tagged from dirty tree\nSymptom: wheel contained a debug print. Cause: tagged with uncommitted changes. Prevention: make release refuses a dirty tree.\n"
+ },
+ "sessions": [
+  {
+   "date": "2026-09-16T13:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "The nightly sweep wrote memory into the wrong project again."
+    },
+    {
+     "role": "assistant",
+     "text": "Root cause: project lookup used the transcript's cwd, and the session had cd'd into a sibling repo. Fix: resolve the project from the session's first cwd, not the last. Verified with a regression test."
+    },
+    {
+     "role": "user",
+     "text": "Log it. And honestly the old 'release tagged from dirty tree' entry is badly worded, whatever."
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "mistakes.md",
+   "preserve_headings": true
+  },
+  {
+   "file": "mistakes.md",
+   "must": "Prevention: make release refuses a dirty tree\\."
+  },
+  {
+   "file": "mistakes.md",
+   "must": "(?i)cwd"
+  }
+ ]
+}

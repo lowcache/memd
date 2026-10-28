@@ -1,0 +1,29 @@
+{
+ "name": "relative-date",
+ "description": "A deadline stated relative to the session date (Tuesday 2026-09-08) must be stored as an absolute date. Quoting the original phrase next to the resolved date is fine.",
+ "sessions": [
+  {
+   "date": "2026-09-08T10:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "Code freeze for 0.6 starts next Monday. Nothing merges after that until the tag."
+    },
+    {
+     "role": "assistant",
+     "text": "Noted: code freeze for 0.6 begins next Monday; merges stop until 0.6 is tagged."
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "*",
+   "must": "2026-09-14"
+  },
+  {
+   "file": "*",
+   "must_not": "(?i)(starts|begins|from) next monday"
+  }
+ ]
+}

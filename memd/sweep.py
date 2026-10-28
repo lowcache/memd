@@ -197,7 +197,7 @@ def cmd_sweep(cfg, jobs=None):
                   file=sys.stderr)
     # Refresh the generated project index in the global store (commit only if it
     # actually changed, to avoid churn on idle sweeps).
-    if write_global_index(cfg):
+    if write_global_index(cfg) and cfg.get("git_commit"):
         git_commit_memory(cfg.get("global_root"), "memd: refresh project index")
     log(f"sweep complete ({failed} failed distill(s))" if failed else "sweep complete")
     return failed

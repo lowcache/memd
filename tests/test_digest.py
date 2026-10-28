@@ -312,3 +312,16 @@ def test_text_log_read_is_capped(memd, env, monkeypatch):
     span, off = memd.digest.digest_text_log(str(lg), 0)
     assert off == 64
     assert span is not None and len(span.lines) == 1
+
+
+def test_digest_jsonl_assistant_string_content(memd, env):
+    # claude-code writes assistant text as blocks; other writers of the same
+    # shape use a plain string, which was silently dropped
+    path = str(env.tmp / "s.jsonl")
+    write_jsonl(path, [
+        {"type": "user", "timestamp": ts(9, 0), "message": {"content": "move the api"}},
+        {"type": "assistant", "timestamp": ts(9, 1),
+         "message": {"content": "moved it to 9090"}},
+    ])
+    span, _ = memd.digest_jsonl(path, 0)
+    assert "A: moved it to 9090" in span.lines

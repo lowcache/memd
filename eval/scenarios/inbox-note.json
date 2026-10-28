@@ -1,0 +1,19 @@
+{
+ "name": "inbox-note",
+ "description": "Another agent leaves a verified fact in the inbox with no session transcript. It must land in memory.",
+ "seed": {
+  "state.md": "# System State\n\n## Backups\n\n- nightly restic snapshot of /srv/data to b2:app-backups\n- restore: never tested\n"
+ },
+ "sessions": [
+  {
+   "date": "2026-09-21T08:00:00Z",
+   "inbox": [
+    "2026-09-21 restore drill: restored the full /srv/data snapshot from b2:app-backups to a scratch host. Checksums match. A full restore takes 14 minutes for 400G. Restores are now verified."
+   ]
+  }
+ ],
+ "probes": [
+  {"file": "state.md", "must": "(?i)14 min"},
+  {"file": "state.md", "must_not": "(?i)never tested"}
+ ]
+}

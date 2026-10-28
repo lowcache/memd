@@ -27,6 +27,18 @@ and this project adheres to
   over-budget files.
 - Eval scenario `over-budget-nudge`: the curator archives a superseded and a
   completed decision and keeps an old one that is still in force.
+- Contract docs for 1.0: `docs/curator-protocol.md` (backend transport,
+  prompt, output schema, ops, guards), `docs/configuration.md` (every config
+  key with its default) and `docs/cli.md` (every command, flag and exit code).
+  A test keeps them in step with the code. README links to them instead of
+  carrying its own config and CLI tables.
+- Eval: 13 new scenarios (19 total) covering state updates, failed fixes,
+  rejected hypotheses, user rules, buried signal, file routing, append-only
+  mistakes, prompt injection in transcripts, partial-view updates, abandoned
+  todos, relative dates, secret redaction and inbox-only notes.
+  `eval/run.py --samples N --jobs J` repeats each scenario and reports pass
+  counts per probe; scenarios can set `config` overrides and per-session
+  `inbox` notes; results record the curator models.
 
 ### Fixed
 
@@ -36,6 +48,30 @@ and this project adheres to
   before, 10 of 10 passing after).
 - README claimed code archives overflow of every memory file; only
   `mistakes.md` is code-trimmed.
+- Claude-shaped JSONL transcripts whose assistant `content` is a plain string
+  (not content blocks) lost every assistant line from the digest. Such lines
+  are now read like user lines. The eval runner had this shape, so every
+  earlier eval result was measured on user turns alone.
+- A malformed `archive_entries` (null, a non-array, or an element without
+  string `content`) raised a raw `TypeError` instead of a curator error. Null
+  is now an empty list, a string element is accepted, and anything else is a
+  `CuratorError`.
+- `memd hook` crashed on stdin JSON that was not an object; it is now treated
+  as an empty payload, like malformed JSON.
+- With `git_commit: false`, the sweep still committed the refreshed global
+  project index, into whatever repo contained `~/.memory` (a dotfiles repo
+  in `$HOME`, for example). It now respects `git_commit`.
+- Parallel syncs (the sweep runs 4 by default) could fail a distill with
+  `No such file or directory: '…/ag_index.json.tmp'`: every JSON and memory
+  write used the same `<file>.tmp` name, so concurrent writers renamed each
+  other's temp file. Temp names are now per process and thread, and the
+  Antigravity index is merged under the state lock instead of overwritten.
+- The eval runner scanned the real `~/.gemini/antigravity-cli`; it now points
+  `antigravity_dir` into its temp tree.
+- Charter: relative dates ("next Monday") are resolved against the session
+  date, and command output, test counts and file listings are listed as
+  noise to discard (eval: relative-date and buried-signal failed on both
+  haiku and sonnet before).
 
 ## [0.5.0] - 2026-10-25
 

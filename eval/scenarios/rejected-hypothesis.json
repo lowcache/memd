@@ -1,0 +1,49 @@
+{
+ "name": "rejected-hypothesis",
+ "description": "A suspected cause (DNS) is investigated and ruled out; the real cause (MTU) is found and fixed. Memory must record the real cause, never the rejected one as fact.",
+ "sessions": [
+  {
+   "date": "2026-09-12T08:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "Pulls from the registry over the VPN hang at random. I bet it's DNS."
+    },
+    {
+     "role": "assistant",
+     "text": "Checked: dig against the VPN resolver answers in 3ms every time and the hangs happen after the TCP connection is up, so DNS is ruled out."
+    },
+    {
+     "role": "assistant",
+     "text": "tcpdump on wg0 shows large TLS records never acknowledged: the path MTU is below the 1420 wg0 default and ICMP fragmentation-needed is filtered upstream."
+    },
+    {
+     "role": "user",
+     "text": "So set the MTU lower?"
+    },
+    {
+     "role": "assistant",
+     "text": "Set wg0 MTU to 1380 in /etc/wireguard/wg0.conf and restarted the tunnel. 20 consecutive registry pulls succeeded. Fixed and verified."
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "*",
+   "must": "(?i)mtu"
+  },
+  {
+   "file": "*",
+   "must": "1380"
+  },
+  {
+   "file": "*",
+   "must_not": "(?i)root cause[^\\n]{0,4}(is |was )?(a |the )?dns\\b"
+  },
+  {
+   "file": "*",
+   "must_not": "(?i)caused by dns"
+  }
+ ]
+}

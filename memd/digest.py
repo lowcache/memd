@@ -11,7 +11,7 @@ import re
 import datetime as dt
 from dataclasses import dataclass, field
 
-from memd.config import AG_INDEX_PATH, load_config, load_json, log, save_json
+from memd.config import AG_INDEX_PATH, load_config, load_json, log, update_json
 
 # --------------------------------------------------------------------------
 # transcript digestion
@@ -135,6 +135,10 @@ def digest_jsonl(path, offset, sidechains=False):
                             span.lines.append(
                                 sub + f"R: [{fmt_chars(len(r))} ch] "
                                 + r[:120 if sub else 80].strip())
+        elif etype == "assistant" and isinstance(content, str):
+            t = content.strip()
+            if t:
+                span.lines.append(sub + "A: " + t[:800 if sub else 2500])
         elif etype == "assistant" and isinstance(content, list):
             for b in content:
                 if not isinstance(b, dict):
@@ -391,7 +395,7 @@ def project_ag_dbs(cfg, project_path):
     roots = sorted(os.path.realpath(p) for p, e in cfg["projects"].items()
                    if not e.get("global"))
     index = load_json(AG_INDEX_PATH, {})
-    changed = False
+    updates = {}
     out = []
     root = os.path.realpath(project_path)
     for db in _glob.glob(os.path.join(conv, "*.db")):
@@ -410,12 +414,12 @@ def project_ag_dbs(cfg, project_path):
             if not proj:
                 proj = _ag_assign_project(db, roots)
             e = {"project": proj or "", "scanned_idx": maxidx}
-            index[db] = e
-            changed = True
+            updates[db] = e
         if e["project"] == root:
             out.append(db)
-    if changed:
-        save_json(AG_INDEX_PATH, index)
+    if updates:
+        # merged under the state lock: parallel syncs scan the same DBs
+        update_json(AG_INDEX_PATH, lambda d: d.update(updates))
     return sorted(out)
 
 

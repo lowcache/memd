@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import subprocess
+import threading
 
 HOME = os.path.expanduser("~")
 XDG_CONFIG_HOME = os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config")
@@ -116,15 +117,21 @@ def load_json(path, default):
 
 def save_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
+    tmp = _tmp_name(path)
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2, sort_keys=True)
         f.write("\n")
     os.replace(tmp, path)
 
 
+def _tmp_name(path):
+    # per process and thread: concurrent writers of one path (parallel sweep
+    # syncs) must not rename each other's half-written temp file
+    return f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+
+
 def atomic_write(path, text):
-    tmp = path + ".tmp"
+    tmp = _tmp_name(path)
     with open(tmp, "w") as f:
         f.write(text)
     os.replace(tmp, path)

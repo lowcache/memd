@@ -1,0 +1,45 @@
+{
+ "name": "user-constraint-captured",
+ "description": "The user states a durable project rule in passing among chatter. It must land in decisions.md.",
+ "sessions": [
+  {
+   "date": "2026-09-13T16:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "Somebody opened a PR adding pyyaml for the config loader."
+    },
+    {
+     "role": "assistant",
+     "text": "I see it. It would let config.json become YAML."
+    },
+    {
+     "role": "user",
+     "text": "No. memd stays stdlib-only, no runtime dependencies, ever. It has to run from a bare python3 on any machine. Close the PR with that reason."
+    },
+    {
+     "role": "assistant",
+     "text": "Closed the PR, citing the stdlib-only rule."
+    },
+    {
+     "role": "user",
+     "text": "thanks, nice weather today btw"
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "decisions.md",
+   "must": "(?i)stdlib"
+  },
+  {
+   "file": "decisions.md",
+   "must": "(?i)dependenc"
+  },
+  {
+   "file": "*",
+   "must_not": "(?i)weather"
+  }
+ ]
+}

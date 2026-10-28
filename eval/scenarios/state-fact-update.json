@@ -1,0 +1,40 @@
+{
+ "name": "state-fact-update",
+ "description": "A live fact in state.md changes. The new value replaces the old one; unrelated facts in the same section survive.",
+ "seed": {
+  "state.md": "# System State\n\n## Services\n\n- api: localhost:8080\n- worker: 3 replicas, memd-worker.service\n- cache: redis on localhost:6379\n"
+ },
+ "sessions": [
+  {
+   "date": "2026-09-10T09:00:00Z",
+   "turns": [
+    {
+     "role": "user",
+     "text": "The unifi controller took 8080 after the router update. Move the api."
+    },
+    {
+     "role": "assistant",
+     "text": "Moved the api listener to localhost:9090 in config/server.yaml and restarted it; health check on 9090 passes. Worker and redis untouched."
+    }
+   ]
+  }
+ ],
+ "probes": [
+  {
+   "file": "state.md",
+   "must": "9090"
+  },
+  {
+   "file": "state.md",
+   "must_not": "localhost:8080"
+  },
+  {
+   "file": "state.md",
+   "must": "(?i)3 replicas"
+  },
+  {
+   "file": "state.md",
+   "must": "6379"
+  }
+ ]
+}
