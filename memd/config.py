@@ -156,6 +156,38 @@ def update_json(path, mutate):
         fd.close()
 
 
+def store_key(path):
+    """Identify a memory store across symlinks and bind mounts."""
+    try:
+        st = os.stat(os.path.join(path, ".memory"))
+        return st.st_dev, st.st_ino
+    except OSError:
+        return None
+
+
+def merge_aliases(projects):
+    """Merge registry entries that reach the same memory store in place."""
+    groups = {}
+    for path, entry in projects.items():
+        if not entry.get("global"):
+            key = store_key(path)
+            if key is not None:
+                groups.setdefault(key, []).append(path)
+    for paths in groups.values():
+        if len(paths) < 2:
+            continue
+        canonical = min(paths, key=lambda p: (len(p), p))
+        entry = projects[canonical]
+        aliases = list(entry.get("aliases", []))
+        sources = list(entry.get("extra_sources", []))
+        for path in sorted(p for p in paths if p != canonical):
+            other = projects.pop(path)
+            aliases.extend([path, *other.get("aliases", [])])
+            sources.extend(other.get("extra_sources", []))
+        entry["aliases"] = list(dict.fromkeys(p for p in aliases if p != canonical))
+        entry["extra_sources"] = list(dict.fromkeys(sources))
+
+
 def load_config():
     cfg = dict(DEFAULT_CONFIG)
     on_disk = load_json(CONFIG_PATH, {})
@@ -164,6 +196,7 @@ def load_config():
             cfg["budgets"] = {**DEFAULT_CONFIG["budgets"], **v}
         else:
             cfg[k] = v
+    merge_aliases(cfg["projects"])
     return cfg
 
 

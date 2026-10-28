@@ -42,6 +42,7 @@ from memd.config import (
     log,
     save_config,
     save_json,
+    store_key,
     today,
     update_json,
 )
@@ -55,6 +56,7 @@ from memd.memory import (
     append_archive,
     archive_path,
     brief_sections,
+    canonical_path,
     enforce_budget_mistakes,
     find_project,
     git_commit_memory,

@@ -245,6 +245,11 @@ def main():
         if path not in cfg["exclude"]:
             cfg["exclude"].append(path)
         cfg["projects"].pop(path, None)
+        for entry in cfg["projects"].values():
+            if "aliases" in entry:
+                entry["aliases"] = [p for p in entry["aliases"] if p != path]
+                if not entry["aliases"]:
+                    del entry["aliases"]
         save_config(cfg)
         print(f"excluded {path}")
 

@@ -386,18 +386,21 @@ def _ag_assign_project(db, roots):
 def project_ag_dbs(cfg, project_path):
     """Conversation DBs attributed to this project (cached in ag_index)."""
     import glob as _glob
+    from memd.memory import canonical_path
     conv = ag_conversations_dir(cfg)
     if not os.path.isdir(conv):
         return []
     # Exclude the global root: its path ($HOME) is a substring of every home
     # path, so it would win _ag_assign_project's mention-count and steal every
     # conversation from the real (nested) project. Global is inbox-only anyway.
-    roots = sorted(os.path.realpath(p) for p, e in cfg["projects"].items()
-                   if not e.get("global"))
+    owners = {os.path.realpath(candidate): p
+              for p, e in cfg["projects"].items() if not e.get("global")
+              for candidate in [p, *e.get("aliases", [])]}
+    roots = sorted(owners)
     index = load_json(AG_INDEX_PATH, {})
     updates = {}
     out = []
-    root = os.path.realpath(project_path)
+    root = canonical_path(cfg, project_path)
     for db in _glob.glob(os.path.join(conv, "*.db")):
         e = index.get(db)
         if not isinstance(e, dict):
@@ -413,9 +416,9 @@ def project_ag_dbs(cfg, project_path):
                 proj = max(inside, key=len, default=None)
             if not proj:
                 proj = _ag_assign_project(db, roots)
-            e = {"project": proj or "", "scanned_idx": maxidx}
+            e = {"project": owners[proj] if proj else "", "scanned_idx": maxidx}
             updates[db] = e
-        if e["project"] == root:
+        if canonical_path(cfg, e["project"]) == root:
             out.append(db)
     if updates:
         # merged under the state lock: parallel syncs scan the same DBs

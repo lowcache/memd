@@ -8,14 +8,15 @@ import os
 import re
 
 from memd.config import (CLAUDE_PROJECTS_DIR, CURSORS_PATH, LOCK_DIR,
-                         MEMORY_FILES, META_PATH, load_json, log, update_json)
+                         MEMORY_FILES, META_PATH, load_json, log, store_key,
+                         update_json)
 from memd.curator import (apply_ops, build_prompt, call_curator,
                           dedupe_mistakes, select_view, validate)
 from memd.digest import (ag_max_idx, cap_digest, collapse_repeats, digest_source,
                          project_ag_dbs, redact, render_span, sort_spans,
                          truncate_spans)
 from memd.inbox import collect_inbox
-from memd.memory import (append_archive, enforce_budget_mistakes,
+from memd.memory import (append_archive, canonical_path, enforce_budget_mistakes,
                          git_commit_memory, read_memory, scaffold,
                          write_memory_file)
 
@@ -51,7 +52,9 @@ def _journal(project_path, trigger, model=None, digest_chars=0, outcome="ok",
 
 def project_lock(path):
     os.makedirs(LOCK_DIR, exist_ok=True)
-    h = hashlib.sha256(path.encode()).hexdigest()[:16]
+    key = store_key(path)
+    identity = f"store:{key[0]}:{key[1]}" if key is not None else path
+    h = hashlib.sha256(identity.encode()).hexdigest()[:16]
     fd = open(os.path.join(LOCK_DIR, h + ".lock"), "w")
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -87,7 +90,7 @@ def transcript_files(cfg, project_path):
     """
     import glob as _glob
     files = []
-    rp = os.path.realpath(project_path)
+    rp = canonical_path(cfg, project_path)
     entry = cfg["projects"].get(project_path) or cfg["projects"].get(rp) or {}
     if entry.get("global"):
         # Inbox-only. $HOME as the global project path would otherwise match
@@ -97,22 +100,28 @@ def transcript_files(cfg, project_path):
         for pattern in entry.get("extra_sources", []):
             files.extend(_glob.glob(os.path.expanduser(pattern)))
         return sorted(set(files))
-    enc = encode_claude_dir(rp)
-    sub_encs = [
-        encode_claude_dir(os.path.realpath(p))
-        for p in cfg["projects"]
-        if os.path.realpath(p) != rp
-        and os.path.realpath(p).startswith(rp.rstrip("/") + "/")
-    ]
+    roots = [rp] + [os.path.realpath(p) for p in entry.get("aliases", [])]
+    encs = {encode_claude_dir(r) for r in roots}
+    sub_encs = set()
+    for p, other in cfg["projects"].items():
+        if p == rp:
+            continue
+        for candidate in [p, *other.get("aliases", [])]:
+            candidate = os.path.realpath(candidate)
+            for root in roots:
+                if candidate.startswith(root.rstrip("/") + "/"):
+                    rel = candidate[len(root.rstrip("/")):]
+                    sub_encs.update(encode_claude_dir(r.rstrip("/") + rel)
+                                    for r in roots)
     for d in _glob.glob(os.path.join(CLAUDE_PROJECTS_DIR, "*")):
         base = os.path.basename(d)
-        if base == enc or base.startswith(enc + "-"):
+        if any(base == enc or base.startswith(enc + "-") for enc in encs):
             if any(base == s or base.startswith(s + "-") for s in sub_encs):
                 continue  # owned by a nested registered project
             files.extend(_glob.glob(os.path.join(d, "*.jsonl")))
-    for pattern in cfg["projects"].get(project_path, {}).get("extra_sources", []):
+    for pattern in entry.get("extra_sources", []):
         files.extend(_glob.glob(os.path.expanduser(pattern)))
-    files.extend(project_ag_dbs(cfg, project_path))
+    files.extend(project_ag_dbs(cfg, rp))
     return sorted(set(files))
 
 
@@ -167,6 +176,7 @@ def sync_project(cfg, project_path, trigger="manual", transcript=None, dry_run=F
     sync, nothing new, or too little to distill yet), False on a failed
     distill."""
     project_path = os.path.realpath(project_path)
+    project_path = canonical_path(cfg, project_path)
     entry = cfg["projects"].get(project_path)
     name = entry["name"] if entry else os.path.basename(project_path)
     if not os.path.isdir(os.path.join(project_path, ".memory")):

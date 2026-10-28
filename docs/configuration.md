@@ -63,6 +63,13 @@ from the curator's perspective.
 ## Per-project settings
 
 `projects.<path>.name` names the project in prompts and memory metadata.
+
+`projects.<path>.aliases` lists other paths that reach the same `.memory` store,
+such as bind mounts and linked worktrees. memd manages aliases: entries sharing a
+store merge when the config loads, with the shortest path becoming the entry;
+registering another path to that store adds an alias. Sessions and transcripts
+under any alias belong to the project, with one lock per store.
+
 `projects.<path>.extra_sources` is an array of transcript file globs. Globs expand
 `~`; relative globs resolve against the process working directory, so absolute
 globs avoid ambiguity. They supplement automatic sources for normal projects.

@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from memd.config import (META_PATH, MEMORY_FILES, atomic_write, git_toplevel,
-                         load_json, log, save_config, today)
+                         load_json, log, save_config, store_key, today)
 from memd.inbox import collect_inbox
 
 # The brief is injected into a session's starting context, and its content was
@@ -203,18 +203,40 @@ def scaffold(path, name=None):
     return created
 
 
+def canonical_path(cfg, path):
+    """Resolve a registered alias to its project's registry key."""
+    path = os.path.realpath(path)
+    if path in cfg["projects"]:
+        return path
+    for p, entry in cfg["projects"].items():
+        if path in entry.get("aliases", []):
+            return p
+    return path
+
+
 def register(cfg, path, name=None):
     path = os.path.realpath(path)
-    if path not in cfg["projects"]:
-        cfg["projects"][path] = {
-            "name": name or os.path.basename(path.rstrip("/")),
-            "extra_sources": [],
-        }
-        save_config(cfg)
+    if path in cfg["projects"]:
+        return cfg["projects"][path]
+    for entry in cfg["projects"].values():
+        if path in entry.get("aliases", []):
+            return entry
+    key = store_key(path)
+    if key is not None:
+        for p, entry in cfg["projects"].items():
+            if not entry.get("global") and store_key(p) == key:
+                entry.setdefault("aliases", []).append(path)
+                save_config(cfg)
+                return entry
+    cfg["projects"][path] = {
+        "name": name or os.path.basename(path.rstrip("/")),
+        "extra_sources": [],
+    }
+    save_config(cfg)
     return cfg["projects"][path]
 
 
-def find_project(cfg, cwd):
+def find_project(cfg, cwd, _depth=0):
     """Map a session cwd to a registered project root (longest prefix wins).
 
     The global root (entry flagged "global") is deliberately NOT matched here:
@@ -222,13 +244,19 @@ def find_project(cfg, cwd):
     callers AFTER new-project auto-scaffolding has had its chance on an
     unmatched cwd."""
     cwd = os.path.realpath(cwd)
-    best = None
+    best = via = None
     for p, e in cfg["projects"].items():
         if e.get("global"):
             continue
-        if cwd == p or cwd.startswith(p.rstrip("/") + "/"):
-            if best is None or len(p) > len(best):
-                best = p
+        for candidate in [p, *e.get("aliases", [])]:
+            if cwd == candidate or cwd.startswith(candidate.rstrip("/") + "/"):
+                if via is None or len(candidate) > len(via):
+                    best, via = p, candidate
+    if best is not None and via != best and _depth < 2:
+        # matched through an alias: re-root onto the project's own path so a
+        # project nested under it (registered by that path) can still win
+        return find_project(cfg, best.rstrip("/") + cwd[len(via.rstrip("/")):],
+                            _depth + 1)
     return best
 
 

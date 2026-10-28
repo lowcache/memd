@@ -50,6 +50,11 @@ and this project adheres to
 
 ### Fixed
 
+- Projects reachable by two paths (bind mounts such as an impermanence `/persist`
+  mount, or linked worktrees) were registered and distilled twice, concurrently,
+  under separate locks, so one curator's update could be overwritten by the
+  other's and the same entries archived twice. Identity is now the store's device and inode, extra paths
+  are recorded as aliases, and transcripts from every alias are read.
 - Charter: a replacement that changes what a section is about now starts its
   body with the new heading, renaming the section. Curators sometimes kept a
   stale heading over new content (eval decision-reversal: about 1 run in 10
