@@ -1,8 +1,8 @@
-# memd — Agent-Driven Project Memory Curator
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/lowcache/memd/main/assets/memdbanner.jpeg" alt="memd logo" />
 </p>
+
+# memd — Agent-Driven Project Memory Curator
 
 [![CI](https://github.com/lowcache/memd/actions/workflows/ci.yml/badge.svg)](https://github.com/lowcache/memd/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/memd.svg)](https://pypi.org/project/memd/)
