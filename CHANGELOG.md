@@ -16,6 +16,14 @@ and this project adheres to
   no longer writes those keys back. Custom backends must emit `ops` (see
   `contrib/curators/README.md`, whose smoke test now asks for them).
 
+### Changed
+
+- `memd init` now appends the memd section to an existing `AGENTS.md`,
+  `CLAUDE.md` or `GEMINI.md` instead of skipping it, after copying the original
+  to `<name>.bak` (the next free `<name>.bak.N` if one exists). Files that
+  already carry the section are untouched, so re-running is a no-op; a symlink
+  such as `CLAUDE.md -> AGENTS.md` is appended once.
+
 ### Added
 
 - Over-budget nudge. When `state.md`, `decisions.md` or `todo.md` exceeds its

@@ -184,22 +184,86 @@ def test_agent_files_written_for_detected_tools(memd, tmp_path, monkeypatch):
     assert len(created) == 2
 
 
-def test_agent_files_never_overwrite(memd, tmp_path, monkeypatch):
-    """CLAUDE.md and friends are commonly long, hand-written files."""
+def _claude_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
-
     proj = tmp_path / "proj"
     proj.mkdir()
+    return proj
+
+
+def test_existing_agent_file_backed_up_then_appended(memd, tmp_path, monkeypatch, capsys):
+    """A hand-written CLAUDE.md keeps its content, gains the memd section, and
+    the original is saved beside it."""
+    proj = _claude_home(tmp_path, monkeypatch)
     mine = "# My own instructions\n\nDo not clobber me.\n"
     (proj / "CLAUDE.md").write_text(mine)
 
     created = memd.write_agent_files(str(proj))
 
-    assert (proj / "CLAUDE.md").read_text() == mine
-    assert str(proj / "CLAUDE.md") not in created
+    text = (proj / "CLAUDE.md").read_text()
+    assert text.startswith(mine)
+    assert text.count(memd.MEMD_SECTION_HEADING) == 1
+    assert "Read by Claude Code" in text
+    assert "# Project Instructions" not in text
+    assert (proj / "CLAUDE.md.bak").read_text() == mine
+    assert str(proj / "CLAUDE.md.bak") in created
+    assert "CLAUDE.md" in capsys.readouterr().out
     assert (proj / "AGENTS.md").exists()
+
+
+def test_existing_agent_file_found_without_tool_dir(memd, tmp_path, monkeypatch):
+    """An existing GEMINI.md means the tool is in use, detected or not."""
+    proj = _claude_home(tmp_path, monkeypatch)
+    (proj / "GEMINI.md").write_text("# Gemini rules\n")
+    memd.write_agent_files(str(proj))
+    assert memd.MEMD_SECTION_HEADING in (proj / "GEMINI.md").read_text()
+
+
+def test_agent_files_rerun_changes_nothing(memd, tmp_path, monkeypatch):
+    proj = _claude_home(tmp_path, monkeypatch)
+    (proj / "CLAUDE.md").write_text("# Mine\n")
+    memd.write_agent_files(str(proj))
+    snapshot = {p.name: p.read_text() for p in proj.iterdir()}
+
+    assert memd.write_agent_files(str(proj)) == []
+    assert {p.name: p.read_text() for p in proj.iterdir()} == snapshot
+
+
+def test_agent_file_symlink_appended_once(memd, tmp_path, monkeypatch):
+    """CLAUDE.md -> AGENTS.md is common; the shared file gets one section and
+    the link stays a link."""
+    proj = _claude_home(tmp_path, monkeypatch)
+    (proj / "AGENTS.md").write_text("# Shared\n")
+    (proj / "CLAUDE.md").symlink_to("AGENTS.md")
+
+    memd.write_agent_files(str(proj))
+
+    assert (proj / "CLAUDE.md").is_symlink()
+    assert (proj / "AGENTS.md").read_text().count(memd.MEMD_SECTION_HEADING) == 1
+    assert not (proj / "CLAUDE.md.bak").exists()
+
+
+def test_existing_backup_never_overwritten(memd, tmp_path, monkeypatch):
+    proj = _claude_home(tmp_path, monkeypatch)
+    (proj / "CLAUDE.md").write_text("# Mine\n")
+    (proj / "CLAUDE.md.bak").write_text("someone else's backup\n")
+
+    memd.write_agent_files(str(proj))
+
+    assert (proj / "CLAUDE.md.bak").read_text() == "someone else's backup\n"
+    assert (proj / "CLAUDE.md.bak.1").read_text() == "# Mine\n"
+
+
+def test_append_preserves_file_mode(memd, tmp_path, monkeypatch):
+    proj = _claude_home(tmp_path, monkeypatch)
+    f = proj / "CLAUDE.md"
+    f.write_text("# Mine")          # no trailing newline
+    f.chmod(0o600)
+    memd.write_agent_files(str(proj))
+    assert f.stat().st_mode & 0o777 == 0o600
+    assert f.read_text().startswith("# Mine\n\n" + memd.MEMD_SECTION_HEADING)
 
 
 def test_auto_discovery_writes_nothing_into_project_root(memd, tmp_path, monkeypatch):

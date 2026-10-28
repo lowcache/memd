@@ -78,8 +78,9 @@ SKELETONS = {
     "todo.md": "# Open Tasks\n\n_No tasks recorded yet._",
 }
 
-_MEMORY_PROTOCOL = """\
-## Memory protocol (managed by memd)
+MEMD_SECTION_HEADING = "## Memory protocol (managed by memd)"
+
+_MEMORY_PROTOCOL = MEMD_SECTION_HEADING + """
 Read `./.memory/state.md`, `decisions.md`, `mistakes.md`, and `todo.md` before
 substantive work. They are distilled automatically after sessions — keep them
 authoritative. To leave an explicit note for the memory curator (from any CLI,
@@ -91,53 +92,88 @@ Do not hand-edit the four memory files; the curator rewrites them on every pass.
 # One instruction file per convention, written to the project root where each
 # tool actually reads it, so a scaffolded project does not presume any
 # particular assistant. Same protocol text throughout; only the trailing note
-# differs. An existing file of any of these names is never touched — they are
-# commonly hand-written and long.
-AGENT_FILES = {
-    "AGENTS.md": "# Project Instructions\n\n" + _MEMORY_PROTOCOL + """
+# differs.
+_AGENT_NOTES = {
+    "AGENTS.md": """
 Read by tools following the [agents.md](https://agents.md) standard: Codex,
 Cursor, Zed, Gemini CLI, and others.
 """,
-    "CLAUDE.md": "# Project Instructions\n\n" + _MEMORY_PROTOCOL + """
+    "CLAUDE.md": """
 Read by Claude Code. With memd's hooks installed the session-start brief is
 injected automatically, so this file mainly states the contract for humans and
 subagents.
 """,
-    "GEMINI.md": "# Project Instructions\n\n" + _MEMORY_PROTOCOL + """
+    "GEMINI.md": """
 Read by the Gemini CLI / antigravity-cli. Those tools have no memd lifecycle
 hooks, so memory refreshes on the sweep timer rather than at session end.
 """,
 }
+AGENT_SECTIONS = {f: _MEMORY_PROTOCOL + note for f, note in _AGENT_NOTES.items()}
+AGENT_FILES = {f: "# Project Instructions\n\n" + sec
+               for f, sec in AGENT_SECTIONS.items()}
+
+
+def _free_backup_name(fpath):
+    bak = fpath + ".bak"
+    n = 0
+    while os.path.lexists(bak):
+        n += 1
+        bak = f"{fpath}.bak.{n}"
+    return bak
 
 
 def write_agent_files(path):
     """Write the memd contract into the project root under the names each tool
-    reads. Never overwrites: these files are commonly long and hand-written.
+    reads. A missing file is created; an existing one without the memd section
+    is copied to <name>.bak (never overwriting a backup) and the section is
+    appended. A file that already has the section is left alone, so re-running
+    changes nothing.
 
     Deliberately NOT part of scaffold(). Creating the memory store is what memd
     needs in order to run; putting files in the project root is a change to the
     user's workspace, so only an explicit `memd init` does it. AGENTS.md is the
     cross-tool standard and is always written; the tool-specific names are added
-    only where that tool is actually in use, so a project does not accumulate
-    instructions for assistants nobody here runs.
+    where that tool is in use, or where the file already exists.
 
-    Returns the list of created paths."""
+    Returns the list of created paths (new files and backups)."""
     created = []
     # Expand at call time, not import time: config.HOME is fixed when the module
     # loads, which would ignore a changed environment and make this untestable.
     home = os.path.expanduser("~")
-    wanted = ["AGENTS.md"]
-    if os.path.isdir(os.path.join(path, ".claude")) or \
-            os.path.isdir(os.path.join(home, ".claude")):
-        wanted.append("CLAUDE.md")
-    if os.path.isdir(os.path.join(home, ".gemini")) or \
-            os.path.isdir(os.path.join(path, ".gemini")):
-        wanted.append("GEMINI.md")
-    for fname in wanted:
+    detected = {
+        "AGENTS.md": True,
+        "CLAUDE.md": os.path.isdir(os.path.join(path, ".claude"))
+        or os.path.isdir(os.path.join(home, ".claude")),
+        "GEMINI.md": os.path.isdir(os.path.join(home, ".gemini"))
+        or os.path.isdir(os.path.join(path, ".gemini")),
+    }
+    seen = set()  # real paths: CLAUDE.md -> AGENTS.md is one file
+    for fname in AGENT_FILES:
         fpath = os.path.join(path, fname)
         if not os.path.exists(fpath):
-            atomic_write(fpath, AGENT_FILES[fname])
-            created.append(fpath)
+            # a dangling symlink is the user's to fix, not ours to replace
+            if detected[fname] and not os.path.islink(fpath):
+                atomic_write(fpath, AGENT_FILES[fname])
+                created.append(fpath)
+                seen.add(os.path.realpath(fpath))
+            continue
+        real = os.path.realpath(fpath)
+        if real in seen:
+            continue
+        seen.add(real)
+        with open(real) as f:
+            text = f.read()
+        if MEMD_SECTION_HEADING in text:
+            continue
+        bak = _free_backup_name(fpath)
+        shutil.copy2(real, bak)
+        created.append(bak)
+        # append in place: keeps the file's mode, owner and any symlink
+        sep = "" if not text else "\n" if text.endswith("\n") else "\n\n"
+        with open(real, "a") as f:
+            f.write(sep + AGENT_SECTIONS[fname])
+        print(f"appended memd section to {fname} "
+              f"(original saved as {os.path.basename(bak)})")
     return created
 
 

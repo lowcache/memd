@@ -89,7 +89,7 @@ You don't have to write those instructions yourself. `memd init` puts them in th
 | `CLAUDE.md` | Claude Code | if `.claude/` exists here or in your home directory |
 | `GEMINI.md` | Gemini CLI / antigravity-cli | if `.gemini/` exists |
 
-So a project picks up instructions for the tools you actually use, not for every assistant that exists. **Your own files are never overwritten** — if a `CLAUDE.md` already exists, memd leaves it exactly as it is and writes only the missing ones. Copy the memd section into yours, or keep both.
+So a project picks up instructions for the tools you actually use, not for every assistant that exists. **Your own files keep their content.** If a `CLAUDE.md` (or `AGENTS.md`, `GEMINI.md`) already exists, memd copies it to `CLAUDE.md.bak` beside it and appends the memd section to the end; it never overwrites an existing backup. A file that already has the section is left alone, so running `memd init` again changes nothing.
 
 For two conventions memd doesn't write — GitHub Copilot's `.github/copilot-instructions.md` and Cursor's `.cursor/rules/memd.mdc` — plus longer versions of all of the above, see [`contrib/agents/`](contrib/agents/).
 
@@ -248,7 +248,7 @@ memd draws a hard line between what it needs in order to work and what changes y
 
 **Automatically** — when the session-start hook or the sweep notices a git repo you're working in — memd creates `./.memory/` and registers the project. That directory is its own git repository, so memory history never enters your project's history, and the ignore rule goes in `.git/info/exclude`, which is local to your clone and untracked. Nothing you have committed is modified. Turn discovery off entirely with `"auto_scaffold": false`, or skip individual repos with `memd exclude <path>`.
 
-**Only when you run `memd init`** does memd touch the project itself: it adds `.memory/` to your tracked `.gitignore` (so the rule is shared with collaborators) and writes the memory contract into the project root. `AGENTS.md` is always written, since it's the cross-tool standard; `CLAUDE.md` and `GEMINI.md` appear only if you actually use those tools. **Existing files of those names are never overwritten** — if you already have a `CLAUDE.md`, memd leaves it alone.
+**Only when you run `memd init`** does memd touch the project itself: it adds `.memory/` to your tracked `.gitignore` (so the rule is shared with collaborators) and writes the memory contract into the project root. `AGENTS.md` is always written, since it's the cross-tool standard; `CLAUDE.md` and `GEMINI.md` appear only if you actually use those tools. **Existing files of those names are appended to, not replaced** — the original is saved as `<name>.bak` first.
 
 Everything memd generates is plain markdown under git, so anything it got wrong is visible in a diff and revertable.
 

@@ -47,6 +47,7 @@ from memd.config import (
 )
 from memd.memory import (
     AGENT_FILES,
+    MEMD_SECTION_HEADING,
     write_agent_files,
     BRIEF_NOTE,
     FM_RE,

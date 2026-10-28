@@ -15,11 +15,16 @@ memd init [path] [--name NAME] [--global]
 `path` defaults to `.`. `--name` defaults to unset; a new registration uses the
 path basename when no name is supplied. `--global` defaults to false and uses
 the configured global root instead of `path`. Explicit project initialization
-also requests agent instruction files and shared ignore configuration; existing
-agent files are preserved.
+also writes shared ignore configuration and the agent instruction files
+(`AGENTS.md` always; `CLAUDE.md`, `GEMINI.md` where the tool is in use). An
+existing instruction file without the `## Memory protocol (managed by memd)`
+section is copied to `<name>.bak` (or the next free `<name>.bak.N`) and the
+section is appended; one that has it is left unchanged. A symlinked file is
+appended through the link, once.
 
-Prints the registered path, with created-file and baselined-transcript counts
-when nonzero. Global initialization prints the ready memory path, or
+Prints one line per appended instruction file naming its backup, then the
+registered path, with created-file (backups included) and baselined-transcript
+counts when nonzero. Global initialization prints the ready memory path, or
 `no global_root configured`. Returns 0 for these outcomes, including a disabled
 global root. Returns 2 when the project path is the global root; use `--global`.
 
